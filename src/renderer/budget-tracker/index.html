@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GST Tracker & Billing Console</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body class="dark-mode">
+    <div class="tracker-container">
+        <!-- HEADER -->
+        <header class="tracker-header">
+            <div class="header-title-group">
+                <span class="header-icon">📊</span>
+                <div>
+                    <h1>Budget & GST Tracker Console</h1>
+                    <p class="subtitle">Real-time Sales Budgets, Expenses, and professional GST billing</p>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button class="action-btn btn-primary" id="btn-open-create-invoice">
+                    <span class="icon">➕</span> Create Tax Invoice
+                </button>
+                <button class="action-btn btn-secondary" id="btn-export-gstr">
+                    <span class="icon">📥</span> Export GSTR-1 CSV
+                </button>
+            </div>
+        </header>
+
+        <!-- STATS CARDS -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>Monthly Sales Budget</h3>
+                <p class="stat-value" id="stat-gross">₹0.00</p>
+                <div class="budget-progress-container" style="background: rgba(255,255,255,0.1); border-radius: 99px; height: 6px; margin: 8px 0 4px 0; overflow: hidden;">
+                    <div id="sales-budget-progress" style="background: var(--accent-color, #3b82f6); height: 100%; width: 0%;"></div>
+                </div>
+                <p class="stat-meta" id="sales-budget-meta">Target: ₹100,000.00</p>
+            </div>
+            <div class="stat-card">
+                <h3>Material Expense Budget</h3>
+                <p class="stat-value" id="stat-expenses" style="color: #f87171;">₹0.00</p>
+                <div class="budget-progress-container" style="background: rgba(255,255,255,0.1); border-radius: 99px; height: 6px; margin: 8px 0 4px 0; overflow: hidden;">
+                    <div id="expense-budget-progress" style="background: #f87171; height: 100%; width: 0%;"></div>
+                </div>
+                <p class="stat-meta" id="expense-budget-meta">Limit: ₹40,000.00</p>
+            </div>
+            <div class="stat-card stat-accent">
+                <h3>Net Profitability</h3>
+                <p class="stat-value" id="stat-profit">₹0.00</p>
+                <p class="stat-meta" id="profit-meta">Gross margin performance</p>
+            </div>
+            <div class="stat-card">
+                <h3>GST Collected</h3>
+                <p class="stat-value" id="stat-gst" style="color: #60a5fa;">₹0.00</p>
+                <p class="stat-meta">CGST + SGST + IGST liability</p>
+            </div>
+            <div class="stat-card">
+                <h3>Billed Invoices</h3>
+                <p class="stat-value" id="stat-count">0</p>
+                <p class="stat-meta">Total invoices issued</p>
+            </div>
+        </div>
+
+        <!-- MAIN SECTION -->
+        <div class="main-panel">
+            <div class="panel-header">
+                <h2>GST Invoice History</h2>
+                <div class="search-wrap">
+                    <input type="text" id="search-invoice" placeholder="Search by number, customer, phone...">
+                </div>
+            </div>
+            <div class="table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Inv Number</th>
+                            <th>Date</th>
+                            <th>Customer Details</th>
+                            <th>Taxable Amt</th>
+                            <th>GST (CGST+SGST/IGST)</th>
+                            <th>Gross Total</th>
+                            <th style="text-align: right;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="invoice-tbody">
+                        <tr>
+                            <td colspan="7" class="empty-state">Loading invoice logs...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- BILLING MODAL (CREATE INVOICE) -->
+    <div id="billing-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card billing-card">
+            <div class="modal-header">
+                <h2>Generate New Tax Invoice</h2>
+                <button class="close-btn" id="btn-close-billing-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Customer Details Form -->
+                <div class="form-section">
+                    <h3>Customer Details</h3>
+                    <div class="form-grid">
+                        <div class="form-group relative">
+                            <label>Phone Number</label>
+                            <input type="text" id="inv-cust-phone" placeholder="Type customer phone..." autocomplete="off">
+                            <div id="cust-search-results" class="search-overlay-box" style="display: none;"></div>
+                        </div>
+                        <div class="form-group">
+                            <label>Customer Name</label>
+                            <input type="text" id="inv-cust-name" placeholder="Enter customer name...">
+                        </div>
+                        <div class="form-group">
+                            <label>GSTIN (Optional)</label>
+                            <input type="text" id="inv-cust-gstin" placeholder="15-digit GSTIN..." maxlength="15">
+                        </div>
+                        <div class="form-group">
+                            <label>State Type</label>
+                            <select id="inv-state-type">
+                                <option value="Local">Local State (CGST + SGST)</option>
+                                <option value="Interstate">Out of State (IGST)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Invoice Items -->
+                <div class="items-section">
+                    <div class="section-title-row">
+                        <h3>Invoice Items</h3>
+                        <button class="action-btn btn-secondary btn-sm" id="btn-add-item-row">+ Add Item</button>
+                    </div>
+                    <div class="items-table-container">
+                        <table class="items-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 35%;">Item Description</th>
+                                    <th style="width: 15%;">HSN/SAC</th>
+                                    <th style="width: 10%;">Qty</th>
+                                    <th style="width: 12%;">Rate (₹)</th>
+                                    <th style="width: 13%;">GST Rate</th>
+                                    <th style="text-align: right; width: 15%;">Total</th>
+                                    <th style="width: 5%;"></th>
+                                </tr>
+                            </thead>
+                            <tbody id="billing-items-tbody">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Billing Summary -->
+                <div class="summary-section">
+                    <div class="summary-row">
+                        <span>Taxable Value:</span>
+                        <span id="sum-taxable">₹0.00</span>
+                    </div>
+                    <div class="summary-row" id="row-sum-cgst">
+                        <span>CGST:</span>
+                        <span id="sum-cgst">₹0.00</span>
+                    </div>
+                    <div class="summary-row" id="row-sum-sgst">
+                        <span>SGST:</span>
+                        <span id="sum-sgst">₹0.00</span>
+                    </div>
+                    <div class="summary-row" id="row-sum-igst" style="display: none;">
+                        <span>IGST:</span>
+                        <span id="sum-igst">₹0.00</span>
+                    </div>
+                    <div class="summary-row grand-total-row">
+                        <span>Total (Post Tax):</span>
+                        <span id="sum-grand">₹0.00</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="action-btn btn-secondary" id="btn-cancel-invoice">Cancel</button>
+                <button class="action-btn btn-primary" id="btn-save-print-invoice">Save &amp; Print Invoice</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PRINT VIEW INVOICE OVERLAY -->
+    <div id="print-preview-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card print-preview-card">
+            <div class="modal-header">
+                <h2>Tax Invoice Preview</h2>
+                <div class="header-buttons">
+                    <button class="action-btn btn-primary btn-sm" id="btn-trigger-print">🖨️ Print Invoice</button>
+                    <button class="close-btn" id="btn-close-print-modal">&times;</button>
+                </div>
+            </div>
+            <div class="modal-body printable-area-container">
+                <div id="printable-invoice" class="invoice-bill-paper">
+                    <!-- Loaded Dynamically for print -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="tracker.js"></script>
+</body>
+</html>

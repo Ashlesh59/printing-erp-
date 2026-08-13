@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Place Print Order</title>
+    <meta name="description" content="Submit your print order online — fast, easy, and from anywhere." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --card: #1f2334;
+            --border: #2d3147;
+            --accent: #6366f1;
+            --accent-hover: #818cf8;
+            --success: #10b981;
+            --error: #ef4444;
+            --text: #f1f5f9;
+            --muted: #8892a4;
+            --radius: 14px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 24px 16px 60px;
+        }
+
+        header { text-align: center; margin-bottom: 28px; padding-top: 12px; }
+
+        .shop-badge {
+            display: inline-flex; align-items: center; gap: 8px;
+            background: rgba(99, 102, 241,0.12);
+            border: 1px solid rgba(99, 102, 241,0.3);
+            color: var(--accent-hover);
+            font-size: 0.78rem; font-weight: 600;
+            letter-spacing: 0.08em; text-transform: uppercase;
+            padding: 6px 16px; border-radius: 99px; margin-bottom: 14px;
+        }
+
+        header h1 {
+            font-size: clamp(1.5rem, 5vw, 2rem); font-weight: 800;
+            background: linear-gradient(135deg, #e0e7ff 0%, #818cf8 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background-clip: text; line-height: 1.25; margin-bottom: 8px;
+        }
+
+        header p { color: var(--muted); font-size: 0.9rem; max-width: 320px; margin: 0 auto; line-height: 1.6; }
+
+        .card {
+            background: var(--card); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 28px 22px;
+            width: 100%; max-width: 460px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+        }
+
+        /* Steps */
+        .steps { display: flex; align-items: center; margin-bottom: 26px; }
+        .step { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; position: relative; }
+        .step:not(:last-child)::after {
+            content: ''; position: absolute; top: 14px; left: 58%;
+            width: 84%; height: 2px; background: var(--border);
+            transition: background 0.4s; z-index: 0;
+        }
+        .step.done:not(:last-child)::after { background: var(--accent); }
+        .step-dot {
+            width: 28px; height: 28px; border-radius: 50%;
+            border: 2px solid var(--border);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.75rem; font-weight: 700;
+            color: var(--muted); background: var(--surface);
+            transition: all 0.3s; z-index: 1;
+        }
+        .step.active .step-dot { border-color: var(--accent); background: var(--accent); color: white; }
+        .step.done  .step-dot { border-color: var(--success); background: var(--success); color: white; }
+        .step-label { font-size: 0.65rem; color: var(--muted); font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; }
+        .step.active .step-label { color: var(--text); }
+
+        /* Pages */
+        .page { display: none; flex-direction: column; gap: 16px; }
+        .page.active { display: flex; animation: fadeUp 0.3s ease; }
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(10px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Fields */
+        label { display: flex; flex-direction: column; gap: 7px; font-size: 0.85rem; font-weight: 500; color: var(--text); }
+        label span.req { color: var(--error); margin-left: 2px; }
+        input, select, textarea {
+            background: var(--surface); border: 1.5px solid var(--border);
+            color: var(--text); border-radius: 10px; padding: 12px 14px;
+            font-family: inherit; font-size: 0.95rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            outline: none; width: 100%;
+        }
+        input:focus, select:focus, textarea:focus {
+            border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99, 102, 241,0.15);
+        }
+        select option { background: var(--surface); }
+        textarea { resize: vertical; min-height: 80px; }
+        .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+        /* File Upload */
+        .file-zone {
+            border: 2px dashed var(--border); border-radius: 10px;
+            padding: 28px 16px; text-align: center; cursor: pointer;
+            transition: all 0.2s; background: var(--surface);
+            position: relative;
+        }
+        .file-zone:hover, .file-zone.drag-over {
+            border-color: var(--accent); background: rgba(99, 102, 241,0.07);
+        }
+        .file-zone .icon { font-size: 2rem; margin-bottom: 8px; }
+        .file-zone p { color: var(--muted); font-size: 0.85rem; line-height: 1.5; }
+        .file-zone strong { color: var(--accent-hover); }
+        .file-zone .accepted { font-size: 0.75rem; margin-top: 6px; color: var(--muted); opacity: 0.7; }
+        #file-input { display: none; }
+
+        .file-chosen {
+            display: none; align-items: center; gap: 10px;
+            background: rgba(16,185,129,0.08);
+            border: 1px solid rgba(16,185,129,0.3);
+            border-radius: 10px; padding: 12px 14px;
+            font-size: 0.85rem; color: var(--success);
+        }
+        .file-chosen .remove-file {
+            margin-left: auto; cursor: pointer; color: var(--muted);
+            font-size: 1.1rem; line-height: 1;
+            background: none; border: none; padding: 0;
+        }
+        .file-chosen .remove-file:hover { color: var(--error); }
+
+        /* Progress */
+        .progress-wrap { display: none; flex-direction: column; gap: 8px; }
+        .progress-wrap.show { display: flex; }
+        .progress-bar { height: 5px; background: var(--border); border-radius: 99px; overflow: hidden; }
+        .progress-fill {
+            height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+            border-radius: 99px; width: 0%; transition: width 0.4s ease;
+        }
+        .progress-text { font-size: 0.8rem; color: var(--muted); text-align: center; }
+
+        /* Buttons */
+        .btn {
+            padding: 14px; border-radius: 10px; border: none;
+            font-family: inherit; font-size: 0.95rem; font-weight: 600;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            gap: 8px; transition: all 0.2s;
+        }
+        .btn-primary { background: var(--accent); color: white; width: 100%; }
+        .btn-primary:hover:not(:disabled) {
+            background: var(--accent-hover); transform: translateY(-1px);
+            box-shadow: 0 8px 24px rgba(99, 102, 241,0.3);
+        }
+        .btn-primary:disabled { opacity: 0.55; cursor: not-allowed; }
+        .btn-ghost { background: transparent; border: 1.5px solid var(--border); color: var(--muted); font-size: 0.85rem; }
+        .btn-ghost:hover { border-color: var(--accent); color: var(--accent-hover); }
+        .btn-row { display: flex; gap: 10px; }
+        .btn-row .btn-ghost   { flex: 0 0 auto; padding: 14px 18px; }
+        .btn-row .btn-primary { flex: 1; }
+
+        /* Success */
+        #success-screen {
+            display: none; flex-direction: column;
+            align-items: center; text-align: center; gap: 16px; padding: 8px 0;
+        }
+        .success-icon {
+            width: 72px; height: 72px; background: rgba(16,185,129,0.15);
+            border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            font-size: 2rem; animation: pop 0.4s cubic-bezier(0.175,0.885,0.32,1.275);
+        }
+        @keyframes pop { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        #success-screen h2 { font-size: 1.4rem; font-weight: 700; }
+        #success-screen p  { color: var(--muted); font-size: 0.88rem; line-height: 1.6; max-width: 300px; }
+
+        .order-ref {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 10px; padding: 14px 18px; width: 100%; text-align: left;
+        }
+        .ref-row { display: flex; justify-content: space-between; font-size: 0.85rem; padding: 5px 0; }
+        .ref-row:not(:last-child) { border-bottom: 1px solid var(--border); }
+        .ref-row span:first-child { color: var(--muted); }
+        .ref-row span:last-child  { font-weight: 600; text-align: right; max-width: 200px; }
+
+        footer { margin-top: 24px; color: var(--muted); font-size: 0.78rem; text-align: center; }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="shop-badge">🖨️ Print Shop</div>
+    <h1>Place Your<br/>Print Order</h1>
+    <p>Upload your file and we'll have it ready when you arrive.</p>
+</header>
+
+<div class="card">
+    <div class="steps" id="steps-bar">
+        <div class="step active" id="s1"><div class="step-dot">1</div><div class="step-label">Details</div></div>
+        <div class="step" id="s2"><div class="step-dot">2</div><div class="step-label">Print</div></div>
+        <div class="step" id="s3"><div class="step-dot">3</div><div class="step-label">File</div></div>
+    </div>
+
+    <!-- Page 1: Customer Details -->
+    <div class="page active" id="page1">
+        <label>Your Name <span class="req">*</span>
+            <input type="text" id="cust-name" placeholder="e.g. Rahul Sharma" autocomplete="name" />
+        </label>
+        <label>WhatsApp / Phone <span class="req">*</span>
+            <input type="tel" id="cust-phone" placeholder="e.g. 9876543210" autocomplete="tel" inputmode="numeric" />
+        </label>
+        <button class="btn btn-primary" onclick="goPage(2)">Next — Print Settings →</button>
+    </div>
+
+    <!-- Page 2: Print Preferences -->
+    <div class="page" id="page2">
+        <div class="row">
+            <label>Print Type <span class="req">*</span>
+                <select id="print-type">
+                    <option value="bw">Black &amp; White</option>
+                    <option value="color">Color</option>
+                </select>
+            </label>
+            <label>Paper Size
+                <select id="paper-size">
+                    <option value="A4">A4</option>
+                    <option value="A3">A3</option>
+                    <option value="Letter">Letter</option>
+                    <option value="Legal">Legal</option>
+                </select>
+            </label>
+        </div>
+        <label>Number of Copies
+            <input type="number" id="copies" value="1" min="1" max="500" inputmode="numeric" />
+        </label>
+        <label>Notes / Special Instructions
+            <textarea id="notes" placeholder="e.g. Double-sided, staple, pages 3–10 only..."></textarea>
+        </label>
+        <div class="btn-row">
+            <button class="btn btn-ghost" onclick="goPage(1)">← Back</button>
+            <button class="btn btn-primary" onclick="goPage(3)">Next — Upload File →</button>
+        </div>
+    </div>
+
+    <!-- Page 3: File Upload -->
+    <div class="page" id="page3">
+        <label>Upload Your File <span class="req">*</span></label>
+
+        <div class="file-zone" id="drop-zone">
+            <div class="icon">📄</div>
+            <p><strong>Tap to choose file</strong><br/>or drag &amp; drop here</p>
+            <p class="accepted">PDF, JPG, PNG — max 50 MB</p>
+        </div>
+        <input type="file" id="file-input" accept=".pdf,.jpg,.jpeg,.png" />
+
+        <div class="file-chosen" id="file-chosen">
+            <span>📎</span>
+            <span id="file-name-text" style="flex:1; word-break:break-all;"></span>
+            <button class="remove-file" onclick="removeFile(event)" title="Remove">✕</button>
+        </div>
+
+        <div class="progress-wrap" id="progress-wrap">
+            <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+            <div class="progress-text" id="progress-text">Uploading…</div>
+        </div>
+
+        <div class="btn-row">
+            <button class="btn btn-ghost" id="back-btn" onclick="goPage(2)">← Back</button>
+            <button class="btn btn-primary" id="submit-btn" onclick="submitOrder()">🚀 &nbsp;Submit Order</button>
+        </div>
+    </div>
+
+    <!-- Success -->
+    <div id="success-screen">
+        <div class="success-icon">✅</div>
+        <h2>Order Submitted!</h2>
+        <p>Your print job has been received. The shop will have it ready for you soon.</p>
+        <div class="order-ref" id="order-summary"></div>
+        <button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="location.reload()">Place Another Order</button>
+    </div>
+</div>
+
+<footer>Powered by PrintShop Manager &nbsp;•&nbsp; Secure &amp; Private</footer>
+
+<script>
+// ── Config ───────────────────────────────────────────────────
+const SUPABASE_URL  = 'https://kpfcghsoebwovaaivfrw.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtwZmNnaHNvZWJ3b3ZhYWl2ZnJ3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI3MDcwNjQsImV4cCI6MjA5ODI4MzA2NH0.8jVUK5-gMhIZo7jzSqNDD6oJhnMB-VK97Kh4pJiUwVg';
+const SHOP_ID       = new URLSearchParams(window.location.search).get('shop') || 'DEFAULT';
+const sb            = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+// ─────────────────────────────────────────────────────────────
+
+let currentPage  = 1;
+let selectedFile = null;
+
+// ── Navigation ────────────────────────────────────────────────
+function goPage(n) {
+    if (n > currentPage) {
+        if (currentPage === 1 && !validatePage1()) return;
+    }
+
+    document.getElementById(`page${currentPage}`).classList.remove('active');
+    document.getElementById(`s${currentPage}`).classList.remove('active');
+    document.getElementById(`s${currentPage}`).classList.add('done');
+
+    if (n < currentPage) {
+        document.getElementById(`s${n}`).classList.remove('done');
+    }
+
+    currentPage = n;
+    document.getElementById(`page${n}`).classList.add('active');
+    document.getElementById(`s${n}`).classList.remove('done');
+    document.getElementById(`s${n}`).classList.add('active');
+}
+
+// ── Validation ────────────────────────────────────────────────
+function validatePage1() {
+    const name  = document.getElementById('cust-name').value.trim();
+    const phone = document.getElementById('cust-phone').value.trim();
+    if (!name)               { flash('cust-name');  return false; }
+    if (phone.length < 10)   { flash('cust-phone'); return false; }
+    return true;
+}
+
+function flash(id) {
+    const el = document.getElementById(id);
+    el.style.borderColor = 'var(--error)';
+    el.focus();
+    setTimeout(() => el.style.borderColor = '', 1500);
+}
+
+// ── File handling ─────────────────────────────────────────────
+const fileInput = document.getElementById('file-input');
+if (fileInput) {
+    fileInput.addEventListener('change', e => {
+        if (e.target.files[0]) setFile(e.target.files[0]);
+    });
+}
+
+const dropZone = document.getElementById('drop-zone');
+if (dropZone && fileInput) {
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+    dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop',      e => {
+        e.preventDefault(); dropZone.classList.remove('drag-over');
+        if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+    });
+}
+
+function setFile(file) {
+    if (!dropZone) return;
+    if (file.size > 50 * 1024 * 1024) { alert('File is too large. Maximum size is 50 MB.'); return; }
+    selectedFile = file;
+    dropZone.style.display = 'none';
+    const chosen = document.getElementById('file-chosen');
+    if (chosen) chosen.style.display = 'flex';
+    const fileNameText = document.getElementById('file-name-text');
+    if (fileNameText) fileNameText.textContent = file.name;
+}
+
+function removeFile(e) {
+    if (!dropZone) return;
+    e.stopPropagation();
+    selectedFile = null;
+    if (fileInput) fileInput.value = '';
+    const chosen = document.getElementById('file-chosen');
+    if (chosen) chosen.style.display = 'none';
+    dropZone.style.display = 'block';
+}
+
+// ── Submit ────────────────────────────────────────────────────
+async function submitOrder() {
+    if (!selectedFile) { flash('drop-zone'); alert('Please select a file to upload.'); return; }
+
+    const submitBtn = document.getElementById('submit-btn');
+    const backBtn   = document.getElementById('back-btn');
+    submitBtn.disabled = backBtn.disabled = true;
+    submitBtn.innerHTML = '<span>⏳</span> Uploading…';
+
+    const progressWrap = document.getElementById('progress-wrap');
+    progressWrap.classList.add('show');
+
+    let fileUrl = null;
+
+    try {
+        // ── Step 1: Upload file ──────────────────────────────
+        setProgress(15, 'Uploading file…');
+
+        const safeName = selectedFile.name.replace(/[^a-z0-9._-]/gi, '_').toLowerCase();
+        const filePath = `${SHOP_ID}/${Date.now()}_${safeName}`;
+
+        const { error: uploadErr } = await sb.storage
+            .from('order-files')
+            .upload(filePath, selectedFile, { contentType: selectedFile.type });
+
+        if (uploadErr) {
+            throw new Error('Upload failed: ' + uploadErr.message +
+                '\n\nMake sure the "order-files" bucket exists in Supabase Storage with public read/write policies.');
+        }
+
+        const { data: urlData } = sb.storage.from('order-files').getPublicUrl(filePath);
+        fileUrl = urlData.publicUrl;
+
+        // ── Step 2: Save order record ────────────────────────
+        setProgress(70, 'Saving order…');
+
+        const { error: insertErr } = await sb.from('pending_orders').insert({
+            shop_id:        SHOP_ID,
+            customer_name:  document.getElementById('cust-name').value.trim(),
+            customer_phone: document.getElementById('cust-phone').value.trim(),
+            print_type:     document.getElementById('print-type').value,
+            paper_size:     document.getElementById('paper-size').value,
+            copies:         parseInt(document.getElementById('copies').value) || 1,
+            notes:          document.getElementById('notes').value.trim(),
+            file_url:       fileUrl,
+            file_name:      selectedFile.name,
+            status:         'pending'
+        });
+
+        if (insertErr) throw new Error('Order save failed: ' + insertErr.message);
+
+        setProgress(100, 'Done!');
+        setTimeout(showSuccess, 500);
+
+    } catch (err) {
+        progressWrap.classList.remove('show');
+        submitBtn.disabled = backBtn.disabled = false;
+        submitBtn.innerHTML = '🚀 &nbsp;Submit Order';
+        alert('❌ ' + err.message);
+        console.error(err);
+    }
+}
+
+function setProgress(pct, msg) {
+    document.getElementById('progress-fill').style.width = pct + '%';
+    document.getElementById('progress-text').textContent = msg;
+}
+
+function showSuccess() {
+    for (let i = 1; i <= 3; i++) document.getElementById(`page${i}`).classList.remove('active');
+    document.getElementById('steps-bar').style.display = 'none';
+    document.getElementById('progress-wrap').classList.remove('show');
+
+    document.getElementById('order-summary').innerHTML = `
+        <div class="ref-row"><span>Name</span><span>${esc(document.getElementById('cust-name').value.trim())}</span></div>
+        <div class="ref-row"><span>Phone</span><span>${esc(document.getElementById('cust-phone').value.trim())}</span></div>
+        <div class="ref-row"><span>Print</span><span>${document.getElementById('print-type').value === 'bw' ? 'Black & White' : 'Color'}</span></div>
+        <div class="ref-row"><span>Paper</span><span>${document.getElementById('paper-size').value}</span></div>
+        <div class="ref-row"><span>Copies</span><span>${document.getElementById('copies').value}</span></div>
+        <div class="ref-row"><span>File</span><span>${esc(selectedFile.name)}</span></div>
+    `;
+    document.getElementById('success-screen').style.display = 'flex';
+}
+
+function esc(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.log
+scratch/
+src/main/database/*.db
+src/main/database/*.db-wal
+src/main/database/*.db-shm
+cloud-server/node_modules/
+cloud-server/uploads/*
+!cloud-server/uploads/.gitkeep
+PrintSimulator/*.pdf

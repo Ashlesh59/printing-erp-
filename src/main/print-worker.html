@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        @page {
+            size: auto;
+            margin: 0mm;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background: white;
+            overflow: hidden;
+        }
+        .page-container {
+            page-break-after: always;
+            page-break-inside: avoid;
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            box-sizing: border-box;
+        }
+        canvas {
+            max-width: 100%;
+            max-height: 100%;
+            display: block;
+            object-fit: contain;
+        }
+        @media print {
+            body {
+                background: none;
+            }
+            .page-container {
+                page-break-after: always;
+                page-break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="pages-container"></div>
+
+    <script type="module">
+        import * as pdfjsLib from '../../node_modules/pdfjs-dist/build/pdf.mjs';
+        pdfjsLib.GlobalWorkerOptions.workerSrc = '../../node_modules/pdfjs-dist/build/pdf.worker.mjs';
+        
+        const fs = window.require ? window.require('fs') : require('fs');
+        const { ipcRenderer } = window.require ? window.require('electron') : require('electron');
+
+        ipcRenderer.on('render-pdf', async (event, filePath, options) => {
+            try {
+                const container = document.getElementById('pages-container');
+                container.innerHTML = '';
+
+                if (options && options.printType === 'bw') {
+                    document.body.style.filter = 'grayscale(100%)';
+                } else {
+                    document.body.style.filter = 'none';
+                }
+
+                // Read file directly using fs
+                const fileBytes = fs.readFileSync(filePath);
+                const loadingTask = pdfjsLib.getDocument({ 
+                    data: new Uint8Array(fileBytes),
+                    useSystemFonts: true 
+                });
+                const pdf = await loadingTask.promise;
+                
+                for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                    const page = await pdf.getPage(pageNum);
+                    const viewport = page.getViewport({ scale: 2.0 });
+
+                    const pageDiv = document.createElement('div');
+                    pageDiv.className = 'page-container';
+                    
+                    const canvas = document.createElement('canvas');
+                    canvas.width = viewport.width;
+                    canvas.height = viewport.height;
+                    
+                    pageDiv.appendChild(canvas);
+                    container.appendChild(pageDiv);
+
+                    const context = canvas.getContext('2d');
+                    await page.render({
+                        canvasContext: context,
+                        viewport: viewport
+                    }).promise;
+                }
+
+                // Notify Main process that rendering is complete
+                ipcRenderer.send('print-render-complete');
+            } catch (err) {
+                ipcRenderer.send('print-render-failed', err.message || String(err));
+            }
+        });
+    </script>
+</body>
+</html>

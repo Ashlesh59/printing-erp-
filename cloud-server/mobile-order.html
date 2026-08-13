@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PrintShop Mobile Order</title>
+    <style>
+        :root {
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+            --accent-color: #3b82f6;
+            --success-color: #10b981;
+            --border-color: #e2e8f0;
+        }
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+        }
+        .container {
+            width: 100%;
+            max-width: 500px;
+            background-color: var(--card-bg);
+            min-height: 100vh;
+            padding: 20px;
+            box-sizing: border-box;
+            box-shadow: 0 0 20px rgba(0,0,0,0.05);
+        }
+        h1 {
+            font-size: 1.5rem;
+            text-align: center;
+            margin-top: 10px;
+            margin-bottom: 24px;
+            color: var(--accent-color);
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+        input[type="text"], input[type="tel"], select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 1rem;
+            box-sizing: border-box;
+            transition: border-color 0.2s;
+        }
+        input:focus, select:focus {
+            outline: none;
+            border-color: var(--accent-color);
+        }
+        .file-upload-box {
+            border: 2px dashed var(--accent-color);
+            border-radius: 12px;
+            padding: 30px 20px;
+            text-align: center;
+            background: rgba(59, 130, 246, 0.05);
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .file-upload-box:active {
+            background: rgba(59, 130, 246, 0.1);
+        }
+        #file-name {
+            margin-top: 10px;
+            font-size: 0.9rem;
+            color: var(--accent-color);
+            font-weight: bold;
+            word-break: break-all;
+        }
+        .submit-btn {
+            width: 100%;
+            background-color: var(--success-color);
+            color: white;
+            border: none;
+            padding: 16px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            border-radius: 8px;
+            margin-top: 10px;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        .submit-btn:disabled {
+            opacity: 0.7;
+        }
+        .hidden {
+            display: none !important;
+        }
+        .success-container {
+            text-align: center;
+            padding: 40px 20px;
+        }
+        .error-msg {
+            color: #ef4444;
+            font-size: 0.9rem;
+            margin-top: 8px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container" id="form-container">
+    <h1>🖨️ PrintShop Order</h1>
+    <form id="orderForm">
+        <div class="form-group">
+            <label for="name">Full Name</label>
+            <input type="text" id="name" name="name" required placeholder="John Doe">
+        </div>
+        <div class="form-group">
+            <label for="phone">Phone Number</label>
+            <input type="tel" id="phone" name="phone" required placeholder="1234567890">
+        </div>
+        
+        <div style="display: flex; gap: 12px; margin-bottom: 20px;">
+            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                <label for="printType">Print Type</label>
+                <select id="printType" name="printType">
+                    <option value="color">Color</option>
+                    <option value="bw">Black & White</option>
+                </select>
+            </div>
+            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                <label for="paperSize">Paper Size</label>
+                <select id="paperSize" name="paperSize">
+                    <option value="A4">A4</option>
+                    <option value="A3">A3</option>
+                    <option value="Letter">Letter</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Upload Document (PDF, JPG, PNG) - Max 100MB</label>
+            <input type="file" id="file" name="file" accept=".pdf,.jpg,.jpeg,.png" class="hidden" required>
+            <div class="file-upload-box" id="file-upload-box">
+                <div style="font-size: 2.5rem; margin-bottom: 8px;">📁</div>
+                <div>Tap here to select a file</div>
+                <div id="file-name"></div>
+            </div>
+        </div>
+
+        <div id="error-msg" class="error-msg hidden"></div>
+        
+        <button type="submit" class="submit-btn" id="submit-btn">Send to Shop</button>
+    </form>
+</div>
+
+<div class="container hidden" id="success-container">
+    <div class="success-container">
+        <div style="font-size: 5rem; margin-bottom: 20px;">✅</div>
+        <h2 style="color: var(--success-color);">Order Sent!</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 30px;">Your file has been securely sent to the print shop.</p>
+        <p style="font-weight: bold; font-size: 1.1rem;">Please see the shop operator to complete your order.</p>
+        <button class="submit-btn" style="background: var(--accent-color); margin-top: 30px;" onclick="location.reload()">Send Another File</button>
+    </div>
+</div>
+
+<script>
+    const fileInput = document.getElementById('file');
+    const fileNameDisplay = document.getElementById('file-name');
+    const form = document.getElementById('orderForm');
+    const submitBtn = document.getElementById('submit-btn');
+    const errorMsg = document.getElementById('error-msg');
+    
+    if (fileInput) {
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                const file = e.target.files[0];
+                if (file.size > 100 * 1024 * 1024) {
+                    errorMsg.textContent = "File is too large (max 100MB).";
+                    errorMsg.classList.remove('hidden');
+                    fileInput.value = '';
+                    if (fileNameDisplay) fileNameDisplay.textContent = '';
+                    return;
+                }
+                errorMsg.classList.add('hidden');
+                if (fileNameDisplay) fileNameDisplay.textContent = file.name;
+            } else {
+                if (fileNameDisplay) fileNameDisplay.textContent = '';
+            }
+        });
+    }
+
+    const fileUploadBox = document.getElementById('file-upload-box');
+    if (fileUploadBox && fileInput) {
+        fileUploadBox.addEventListener('click', () => fileInput.click());
+    }
+
+    if (form) {
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            if (errorMsg) errorMsg.classList.add('hidden');
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Uploading...';
+            }
+
+            const formData = new FormData(form);
+
+            try {
+                const shopId = window.location.pathname.substring(1);
+                const response = await fetch('/api/order/' + shopId, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (response.ok && result.success) {
+                    const formContainer = document.getElementById('form-container');
+                    const successContainer = document.getElementById('success-container');
+                    if (formContainer) formContainer.classList.add('hidden');
+                    if (successContainer) successContainer.classList.remove('hidden');
+                } else {
+                    throw new Error(result.message || 'Unknown error occurred.');
+                }
+            } catch (error) {
+                if (errorMsg) errorMsg.textContent = error.message || 'Failed to connect to shop server.';
+                if (errorMsg) errorMsg.classList.remove('hidden');
+            } finally {
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Send to Shop';
+                }
+            }
+        });
+    }
+</script>
+
+</body>
+</html>

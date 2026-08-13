@@ -1,0 +1,590 @@
+/* ============================================================
+   Document Studio — Stylesheet (Phase 2A)
+   Extends the existing design system CSS variables from styles.css
+   ============================================================ */
+
+/* ---- Layout Container ---- */
+#doc-studio {
+    margin: -32px;
+    height: calc(100vh - 60px);
+    width: calc(100% + 64px);
+    box-sizing: border-box;
+}
+
+.doc-studio-container {
+    display: flex;
+    height: calc(100vh - 60px);
+    width: 100%;
+    gap: 0;
+    overflow: hidden;
+    position: relative;
+}
+
+.ds3-tab-content {
+    display: none;
+}
+.ds3-tab-content.active {
+    display: block;
+}
+
+/* ---- Left Tool Panel ---- */
+.doc-tool-panel {
+    width: 272px;
+    flex-shrink: 0;
+    background: var(--sidebar-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-right: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 12px 10px;
+    gap: 4px;
+    scrollbar-width: thin;
+}
+
+.doc-tool-panel::-webkit-scrollbar { width: 4px; }
+.doc-tool-panel::-webkit-scrollbar-track { background: transparent; }
+.doc-tool-panel::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 2px; }
+
+/* ---- Tool Section (Collapsible) ---- */
+.doc-tool-section {
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 4px;
+}
+
+.doc-tool-section-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 12px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: 10px;
+    transition: all 0.2s cubic-bezier(0.16,1,0.3,1);
+    user-select: none;
+    background: transparent;
+    border: none;
+    width: 100%;
+    text-align: left;
+}
+
+.doc-tool-section-header:hover {
+    background: rgba(var(--accent-rgb),0.07);
+    color: var(--accent-color);
+}
+
+.doc-tool-section-header .section-icon { font-size: 1rem; }
+.doc-tool-section-header .section-chevron {
+    margin-left: auto;
+    font-size: 0.7rem;
+    transition: transform 0.2s cubic-bezier(0.16,1,0.3,1);
+}
+.doc-tool-section.expanded .section-chevron { transform: rotate(180deg); }
+
+.doc-tool-section-body {
+    display: none;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 4px 8px 4px;
+}
+.doc-tool-section.expanded .doc-tool-section-body { display: flex; }
+
+/* ---- Individual Tool Buttons ---- */
+.doc-tool-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    font-size: 0.78rem;
+    font-weight: 550;
+    font-family: inherit;
+    color: var(--text-primary);
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.18s cubic-bezier(0.16,1,0.3,1);
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.doc-tool-btn:hover {
+    background: rgba(var(--accent-rgb),0.10);
+    border-color: rgba(var(--accent-rgb),0.3);
+    color: var(--accent-color);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(var(--accent-rgb),0.12);
+}
+
+.doc-tool-btn:active { transform: translateY(0); }
+
+.doc-tool-btn.active {
+    background: rgba(var(--accent-rgb), 0.15);
+    border-color: var(--accent-color);
+    color: var(--accent-color);
+}
+
+.doc-tool-btn .btn-icon { font-size: 0.9rem; line-height: 1; }
+
+/* ---- Center Canvas Area ---- */
+.doc-canvas-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-color);
+    overflow: hidden;
+    position: relative;
+}
+
+/* ---- Canvas Toolbar ---- */
+.doc-canvas-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--sidebar-bg);
+    backdrop-filter: blur(12px);
+    flex-shrink: 0;
+}
+
+.doc-canvas-toolbar-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    flex: 1;
+}
+
+.doc-canvas-zoom-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 3px;
+}
+
+.doc-zoom-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 5px;
+    font-size: 0.85rem;
+    font-family: inherit;
+    transition: all 0.15s ease;
+}
+.doc-zoom-btn:hover { background: rgba(var(--accent-rgb),0.1); color: var(--accent-color); }
+
+.doc-zoom-level {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    min-width: 40px;
+    text-align: center;
+}
+
+/* ---- Page Preview Area ---- */
+.doc-page-preview {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 24px;
+    position: relative;
+}
+
+.doc-page-preview-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    min-height: 100%;
+    width: 100%;
+    padding-bottom: 40px;
+}
+
+.doc-preview-page-wrapper {
+    position: relative;
+    border-radius: 6px;
+    transition: box-shadow 0.2s ease, transform 0.15s ease;
+}
+.doc-preview-page-wrapper:hover {
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.15);
+}
+.doc-preview-page-wrapper.doc-preview-selected {
+    box-shadow: 0 0 0 3px var(--accent-color), 0 8px 24px rgba(var(--accent-rgb), 0.18);
+}
+
+.doc-preview-page-card {
+    background: white;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.08);
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+    transition: box-shadow 0.2s ease;
+    display: block;
+    max-width: 100%;
+    height: auto;
+}
+body.dark-mode .doc-preview-page-card { box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3); }
+
+.doc-preview-page-number {
+    text-align: center;
+    margin-top: 8px;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    padding: 2px 8px;
+    background: rgba(var(--accent-rgb), 0.06);
+    border-radius: 4px;
+    display: inline-block;
+    width: 100%;
+}
+
+/* ---- Empty State ---- */
+.doc-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    height: 100%;
+    color: var(--text-secondary);
+    text-align: center;
+    padding: 40px;
+}
+
+.doc-empty-icon { font-size: 4rem; opacity: 0.3; }
+.doc-empty-title { font-size: 1.1rem; font-weight: 600; }
+.doc-empty-sub { font-size: 0.875rem; max-width: 280px; line-height: 1.5; }
+
+.doc-drop-zone-active {
+    background: rgba(var(--accent-rgb),0.06) !important;
+    border: 2px dashed var(--accent-color) !important;
+}
+
+/* ---- Thumbnail Strip ---- */
+.doc-thumbnail-strip {
+    height: 112px;
+    flex-shrink: 0;
+    border-top: 1px solid var(--border-color);
+    background: var(--sidebar-bg);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 8px 12px;
+    scrollbar-width: thin;
+}
+
+.doc-thumbnail-strip::-webkit-scrollbar { height: 4px; }
+.doc-thumbnail-strip::-webkit-scrollbar-track { background: transparent; }
+.doc-thumbnail-strip::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 2px; }
+
+.doc-thumbnail {
+    flex-shrink: 0;
+    width: 68px;
+    height: 90px;
+    border-radius: 6px;
+    border: 2px solid var(--border-color);
+    overflow: hidden;
+    cursor: pointer;
+    position: relative;
+    background: white;
+    transition: all 0.18s cubic-bezier(0.16,1,0.3,1);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.doc-thumbnail:hover {
+    border-color: rgba(var(--accent-rgb),0.4);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(var(--accent-rgb), 0.15);
+}
+
+.doc-thumbnail.selected {
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 2px rgba(var(--accent-rgb),0.3);
+}
+
+.doc-thumbnail canvas, .doc-thumbnail img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    pointer-events: none;
+}
+
+.doc-thumbnail-label {
+    position: absolute;
+    bottom: 2px;
+    left: 0; right: 0;
+    text-align: center;
+    font-size: 0.6rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--surface) 85%, transparent);
+    padding: 1px 0;
+}
+
+/* ---- Right Print Panel ---- */
+.doc-print-panel {
+    width: 256px;
+    flex-shrink: 0;
+    border-left: 1px solid var(--border-color);
+    background: var(--sidebar-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    padding: 14px 12px;
+    gap: 12px;
+}
+
+.doc-print-panel h4 {
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin: 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+/* ---- Page Counter Badge ---- */
+.doc-page-count-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(var(--accent-rgb),0.1);
+    color: var(--accent-color);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+/* ---- Selection Info Bar ---- */
+.doc-selection-bar {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: rgba(var(--accent-rgb),0.08);
+    border-top: 1px solid rgba(var(--accent-rgb), 0.15);
+    border-bottom: 1px solid rgba(var(--accent-rgb), 0.15);
+    font-size: 0.8rem;
+    color: var(--accent-color);
+    font-weight: 600;
+    flex-shrink: 0;
+}
+.doc-selection-bar.visible { display: flex; }
+
+/* ---- Modal Overlays ---- */
+.doc-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background-color: var(--overlay-bg);
+    backdrop-filter: blur(var(--overlay-blur));
+    -webkit-backdrop-filter: blur(var(--overlay-blur));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.doc-modal-overlay.open {
+    opacity: 1;
+    pointer-events: all;
+}
+
+.doc-modal-card {
+    background: var(--sidebar-bg);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 28px;
+    width: 460px;
+    max-width: 95vw;
+    box-shadow: var(--modal-shadow);
+    transform: scale(0.96) translateY(8px);
+    transition: transform 0.2s cubic-bezier(0.16,1,0.3,1);
+}
+
+.doc-modal-overlay.open .doc-modal-card {
+    transform: scale(1) translateY(0);
+}
+
+.doc-modal-title {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 20px;
+    color: var(--text-primary);
+}
+
+.doc-modal-footer {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color);
+}
+
+/* ---- Form Controls inside panels ---- */
+.doc-field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 10px;
+}
+
+.doc-field-label {
+    font-size: 0.77rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.doc-field-input, .doc-field-select {
+    padding: 7px 10px;
+    background: var(--input-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.85rem;
+    outline: none;
+    transition: border-color 0.15s ease;
+    width: 100%;
+}
+
+.doc-field-input:focus, .doc-field-select:focus {
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb),0.12);
+}
+
+.doc-field-slider {
+    width: 100%;
+    accent-color: var(--accent-color);
+}
+
+/* ---- Action Buttons in Print Panel ---- */
+.doc-action-primary {
+    width: 100%;
+    padding: 10px;
+    background: var(--accent-color);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 0.88rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.18s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+.doc-action-primary:hover {
+    background: var(--accent-hover);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(var(--accent-rgb),0.3);
+}
+
+.doc-action-secondary {
+    width: 100%;
+    padding: 9px;
+    background: var(--card-bg);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.18s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+.doc-action-secondary:hover {
+    border-color: var(--accent-color);
+    color: var(--accent-color);
+}
+
+/* ---- Toast for Doc Studio ---- */
+.doc-toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--card-bg);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 12px 18px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transform: translateY(80px);
+    opacity: 0;
+    transition: all 0.3s cubic-bezier(0.16,1,0.3,1);
+    pointer-events: none;
+    max-width: 340px;
+}
+.doc-toast.visible { transform: translateY(0); opacity: 1; }
+.doc-toast.success .doc-toast-icon { color: var(--success-color); }
+.doc-toast.error .doc-toast-icon { color: var(--error-color); }
+.doc-toast.info .doc-toast-icon { color: var(--accent-color); }
+
+/* ---- Loading Spinner ---- */
+.doc-loading-spinner {
+    width: 20px; height: 20px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--accent-color);
+    border-radius: 50%;
+    animation: doc-spin 0.6s linear infinite;
+}
+@keyframes doc-spin { to { transform: rotate(360deg); } }
+
+/* ---- Undo/Redo Status ---- */
+.doc-history-status {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* ---- PDF-specific Thumbnail Placeholder ---- */
+.doc-thumb-pdf-icon {
+    font-size: 1.8rem;
+    opacity: 0.4;
+    pointer-events: none;
+}

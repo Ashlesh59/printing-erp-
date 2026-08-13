@@ -1,0 +1,59 @@
+{
+  "name": "printshopmanager",
+  "version": "1.0.0",
+  "description": "Offline Desktop Business Software for Print Shops",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "build": {
+    "appId": "com.printshop.manager",
+    "productName": "PrintShop Manager",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!**/test_*",
+      "!**/*.log"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "keywords": [
+    "print-shop",
+    "pos",
+    "desktop",
+    "printing"
+  ],
+  "author": "PrintShop Manager Team",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@sentry/electron": "^7.15.0",
+    "better-sqlite3": "^12.9.0",
+    "chokidar": "^5.0.0",
+    "cors": "^2.8.6",
+    "cropperjs": "^1.5.13",
+    "electron-updater": "^6.8.9",
+    "express": "^5.2.1",
+    "fabric": "^5.3.0",
+    "multer": "^2.1.1",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^5.6.205",
+    "qrcode": "^1.5.4",
+    "ws": "^8.21.1"
+  },
+  "devDependencies": {
+    "electron": "^41.2.1",
+    "electron-builder": "^26.8.1"
+  }
+}
