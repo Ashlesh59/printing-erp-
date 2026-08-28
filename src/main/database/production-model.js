@@ -63,6 +63,17 @@ const ProductionModel = {
                 }
             }
 
+            if (filters.dateStart && filters.dateEnd) {
+                sql += ` AND date(IFNULL(pj.scheduled_start, pj.created_at)) >= date(?) AND date(IFNULL(pj.scheduled_start, pj.created_at)) <= date(?)`;
+                params.push(filters.dateStart, filters.dateEnd);
+            } else if (filters.dateStart) {
+                sql += ` AND date(IFNULL(pj.scheduled_start, pj.created_at)) >= date(?)`;
+                params.push(filters.dateStart);
+            } else if (filters.dateEnd) {
+                sql += ` AND date(IFNULL(pj.scheduled_start, pj.created_at)) <= date(?)`;
+                params.push(filters.dateEnd);
+            }
+
             // Search Query
             if (searchQuery && searchQuery.trim() !== '') {
                 const q = `%${searchQuery.trim()}%`;
@@ -97,17 +108,28 @@ const ProductionModel = {
         }
     },
 
-    getDashboardStats: () => {
+    getDashboardStats: (filters = {}) => {
         try {
-            const waiting = db.prepare("SELECT COUNT(*) as count FROM production_jobs WHERE status = 'Waiting'").get().count;
-            const printing = db.prepare("SELECT COUNT(*) as count FROM production_jobs WHERE status = 'Printing'").get().count;
-            const completedToday = db.prepare("SELECT COUNT(*) as count FROM production_jobs WHERE status IN ('Ready', 'Delivered') AND date(created_at) = date('now', 'localtime')").get().count;
+            let dateCond = "1=1";
+            let params = [];
+            if (filters.dateStart && filters.dateEnd) {
+                dateCond = `date(IFNULL(scheduled_start, created_at)) >= date(?) AND date(IFNULL(scheduled_start, created_at)) <= date(?)`;
+                params = [filters.dateStart, filters.dateEnd];
+            }
+
+            const waiting = db.prepare(`SELECT COUNT(*) as count FROM production_jobs WHERE status = 'Waiting' AND ${dateCond}`).get(...params).count;
+            const printing = db.prepare(`SELECT COUNT(*) as count FROM production_jobs WHERE status = 'Printing' AND ${dateCond}`).get(...params).count;
+            const completed = db.prepare(`SELECT COUNT(*) as count FROM production_jobs WHERE status IN ('Ready', 'Delivered') AND ${dateCond}`).get(...params).count;
+            const totalJobs = db.prepare(`SELECT COUNT(*) as count FROM production_jobs WHERE ${dateCond}`).get(...params).count;
+            
+            const pages = db.prepare(`SELECT SUM(copies) as count FROM production_jobs WHERE ${dateCond}`).get(...params).count || 0; // fallback if pages not strictly in table, using copies
             
             const delayed = db.prepare(`
                 SELECT COUNT(*) as count FROM production_jobs 
                 WHERE status NOT IN ('Ready', 'Delivered', 'Cancelled') 
                   AND (due_time < datetime('now', 'localtime') OR (estimated_completion IS NOT NULL AND estimated_completion > due_time))
-            `).get().count;
+                  AND ${dateCond}
+            `).get(...params).count;
 
             const avgTimeRow = db.prepare(`
                 SELECT AVG((strftime('%s', actual_completion) - strftime('%s', actual_start)) / 60.0) as avg_mins
@@ -123,26 +145,34 @@ const ProductionModel = {
                 printerCounts = db.prepare(`
                     SELECT assigned_printer as name, COUNT(*) as active_jobs, SUM(CASE WHEN status = 'Printing' THEN 1 ELSE 0 END) as is_printing
                     FROM production_jobs
-                    WHERE assigned_printer IS NOT NULL AND status IN ('Waiting', 'Scheduled', 'Printing', 'Paused')
+                    WHERE assigned_printer IS NOT NULL AND status IN ('Waiting', 'Scheduled', 'Printing', 'Paused') AND ${dateCond}
                     GROUP BY assigned_printer
-                `).all();
+                `).all(...params);
             } catch(e) {}
+            
+            const printersActive = printerCounts.filter(p => p.is_printing > 0).length;
 
             return {
+                totalJobs: totalJobs,
                 jobsWaiting: waiting,
                 jobsPrinting: printing,
-                completedToday: completedToday,
+                completedToday: completed,
                 delayedJobs: delayed,
+                totalPages: pages,
+                printersActive: printersActive,
                 avgCompletionMinutes: avgCompletionMinutes,
                 printerStats: printerCounts
             };
         } catch(e) {
             console.error("getDashboardStats error:", e);
             return {
+                totalJobs: 0,
                 jobsWaiting: 0,
                 jobsPrinting: 0,
                 completedToday: 0,
                 delayedJobs: 0,
+                totalPages: 0,
+                printersActive: 0,
                 avgCompletionMinutes: 0,
                 printerStats: []
             };
@@ -388,6 +418,8 @@ const ProductionModel = {
             const dueTime = scheduleDetails.dueTime || scheduleDetails.scheduledStart || scheduleDetails.due_time || null;
             const operator = scheduleDetails.operator || scheduleDetails.assigned_operator || 'Operator';
             const priority = scheduleDetails.priority || 'Normal';
+            const assignedPrinter = scheduleDetails.assignedPrinter || scheduleDetails.assigned_printer || null;
+            const combinedNotes = scheduleDetails.notes || order.notes;
 
             for (const item of items) {
                 // Check if already created
@@ -409,9 +441,10 @@ const ProductionModel = {
                         priority: priority,
                         status: prodStatus,
                         assigned_operator: operator,
+                        assigned_printer: assignedPrinter,
                         scheduled_start: scheduledStart,
                         due_time: dueTime,
-                        notes: order.notes
+                        notes: combinedNotes
                     });
                 }
             }

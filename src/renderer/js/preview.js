@@ -605,7 +605,22 @@ document.addEventListener('DOMContentLoaded', () => {
         return true;
     }
 
-    function cleanupAfterSuccess() {
+    window.clearWorkspace = function() {
+        if (typeof window.currentOrderFiles !== 'undefined') window.currentOrderFiles = [];
+        if (typeof window.fileSettings !== 'undefined') window.fileSettings = {};
+        window.currentDocStudioOutput = null;
+        window.currentJobToSchedule = null;
+
+        const layoutContainer = document.getElementById('preview-layout-container');
+        if (layoutContainer) layoutContainer.innerHTML = '';
+
+        const setupPhone = document.getElementById('setup-phone');
+        const setupName = document.getElementById('setup-name');
+        if (setupPhone) setupPhone.value = '';
+        if (setupName) setupName.value = '';
+    };
+
+    function cleanupAfterSuccess(targetView = 'dashboard') {
         if (currentOrderConfig && currentOrderConfig.phone) {
             try {
                 localStorage.setItem(`prefs_${currentOrderConfig.phone}`, JSON.stringify({
@@ -619,12 +634,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const actionBar = document.getElementById('incoming-create-order-btn');
         if (actionBar) actionBar.style.display = 'none';
 
+        window.clearWorkspace();
+
         document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-        const dashboard = document.getElementById('dashboard');
-        if (dashboard) dashboard.classList.add('active');
+        const targetViewEl = document.getElementById(targetView);
+        if (targetViewEl) targetViewEl.classList.add('active');
         
-        const dashBtn = document.querySelector('.nav-btn[data-target="dashboard"]');
-        if (dashBtn) dashBtn.click();
+        const targetBtn = document.querySelector(`.nav-btn[data-target="${targetView}"]`);
+        if (targetBtn) targetBtn.click();
     }
 
     window.showPrinterErrorModal = async function(errorMsg, payload, options) {
@@ -875,7 +892,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             try {
-                await executeSave('Completed');
+                await executeSave('Waiting');
 
                 if (bannerText) bannerText.textContent = 'Spooling print job to printer...';
 
@@ -889,6 +906,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     if (window.showToast) window.showToast('Order saved to database & sent to printer!', 'success');
 
+                    if (window.refreshAllWorkspaces) window.refreshAllWorkspaces();
                     cleanupAfterSuccess();
                     btnActionSavePrint.disabled = false;
                 } else {
@@ -909,13 +927,29 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
                 }
             } catch (e) {
+                const isCancelled = e.message && (
+                    e.message.toLowerCase().includes('cancel') ||
+                    e.message.toLowerCase().includes('abort')
+                );
                 if (banner && bannerText) {
-                    banner.className = 'comp-status-banner error';
-                    if (spinner) spinner.style.display = 'none';
-                    bannerText.textContent = '❌ Failed: ' + e.message;
+                    if (isCancelled) {
+                        banner.className = 'comp-status-banner info';
+                        if (spinner) spinner.style.display = 'none';
+                        bannerText.textContent = 'ℹ️ Print job cancelled by user.';
+                    } else {
+                        banner.className = 'comp-status-banner error';
+                        if (spinner) spinner.style.display = 'none';
+                        bannerText.textContent = '❌ Failed: ' + e.message;
+                    }
                 }
                 btnActionSavePrint.disabled = false;
-                if (window.showToast) window.showToast(e.message, 'error');
+                if (window.showToast) {
+                    if (isCancelled) {
+                        window.showToast('Print cancelled by user.', 'info');
+                    } else {
+                        window.showToast(e.message, 'error');
+                    }
+                }
             }
         });
     }
@@ -951,7 +985,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     if (window.showToast) window.showToast('Direct print completed cleanly!', 'success');
 
-                    cleanupAfterSuccess();
+                    window.clearWorkspace();
                     elBtnPrintOnly.disabled = false;
                 } else {
                     const err = printResult ? printResult.error : 'Printer offline';
@@ -971,13 +1005,29 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
                 }
             } catch (e) {
+                const isCancelled = e.message && (
+                    e.message.toLowerCase().includes('cancel') ||
+                    e.message.toLowerCase().includes('abort')
+                );
                 if (banner && bannerText) {
-                    banner.className = 'comp-status-banner error';
-                    if (spinner) spinner.style.display = 'none';
-                    bannerText.textContent = '❌ Failed: ' + e.message;
+                    if (isCancelled) {
+                        banner.className = 'comp-status-banner info';
+                        if (spinner) spinner.style.display = 'none';
+                        bannerText.textContent = 'ℹ️ Print job cancelled by user.';
+                    } else {
+                        banner.className = 'comp-status-banner error';
+                        if (spinner) spinner.style.display = 'none';
+                        bannerText.textContent = '❌ Failed: ' + e.message;
+                    }
                 }
                 elBtnPrintOnly.disabled = false;
-                if (window.showToast) window.showToast(e.message, 'error');
+                if (window.showToast) {
+                    if (isCancelled) {
+                        window.showToast('Print cancelled by user.', 'info');
+                    } else {
+                        window.showToast(e.message, 'error');
+                    }
+                }
             }
         });
     }
@@ -1015,11 +1065,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const schedConfirmBtn = document.getElementById('sched-btn-confirm');
     if (schedConfirmBtn) {
         schedConfirmBtn.addEventListener('click', async () => {
+            console.log('[Schedule] Confirm button clicked');
             const modal = document.getElementById('schedule-production-modal');
             const schedDate = document.getElementById('sched-input-date')?.value || new Date().toISOString().split('T')[0];
             const schedTime = document.getElementById('sched-input-time')?.value || '10:00';
             const operator = document.getElementById('sched-input-operator')?.value || 'Production Team';
             const priority = document.getElementById('sched-input-priority')?.value || 'Normal';
+
+            const assignedPrinter = document.getElementById('sched-select-printer')?.value || '';
+            const notes = document.getElementById('sched-input-notes')?.value || '';
 
             if (modal) modal.style.setProperty('display', 'none', 'important');
 
@@ -1035,30 +1089,38 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             try {
+                console.log('[Schedule] Gathering schedule data...');
                 const scheduledDateTime = `${schedDate} ${schedTime}:00`;
                 const scheduleData = {
-                    status: 'Scheduled',
+                    status: 'Waiting',
                     scheduledDate: schedDate,
                     scheduledTime: schedTime,
                     scheduledStart: scheduledDateTime,
                     dueTime: scheduledDateTime,
+                    assignedPrinter: assignedPrinter,
                     operator: operator,
-                    priority: priority
+                    priority: priority,
+                    notes: notes
                 };
+                
+                console.log('[Schedule] Schedule Data:', scheduleData);
 
                 if (window.currentJobToSchedule && (window.currentJobToSchedule.id || window.currentJobToSchedule.jobId)) {
+                    console.log('[Schedule] Updating existing job:', window.currentJobToSchedule);
                     const targetId = window.currentJobToSchedule.id || window.currentJobToSchedule.jobId;
                     if (window.api && window.api.productionScheduleJob) {
                         await window.api.productionScheduleJob(targetId, scheduleData);
+                    } else {
+                        throw new Error('productionScheduleJob API is not available');
                     }
                     window.currentJobToSchedule = null;
                 } else {
-                    await executeSave('Scheduled', scheduleData);
+                    console.log('[Schedule] Creating new scheduled order via executeSave...');
+                    if (typeof executeSave !== 'function') throw new Error('executeSave function is missing');
+                    await executeSave('Waiting', scheduleData);
                 }
 
-                if (typeof window.loadProductionDashboard === 'function') window.loadProductionDashboard();
-                if (typeof window.loadProductionJobs === 'function') window.loadProductionJobs();
-                if (typeof window.loadDashboard === 'function') window.loadDashboard();
+                if (typeof window.refreshAllWorkspaces === 'function') window.refreshAllWorkspaces();
 
                 if (banner && bannerText) {
                     banner.className = 'comp-status-banner success';
@@ -1067,14 +1129,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 if (window.showToast) window.showToast(`Job scheduled for ${schedDate} at ${schedTime} & synced to Printing Queue!`, 'success');
 
-                cleanupAfterSuccess();
+                if (typeof cleanupAfterSuccess === 'function') {
+                    cleanupAfterSuccess('production');
+                }
             } catch(e) {
+                console.error('[Schedule] Failed to schedule job:', e);
                 if (banner && bannerText) {
                     banner.className = 'comp-status-banner error';
                     if (spinner) spinner.style.display = 'none';
-                    bannerText.textContent = '❌ Scheduling Failed: ' + e.message;
+                    bannerText.textContent = '❌ Scheduling Failed: ' + (e.message || 'Unknown error occurred');
                 }
-                if (window.showToast) window.showToast(e.message, 'error');
+                if (window.showToast) window.showToast('Scheduling Failed: ' + (e.message || 'Unknown error'), 'error');
             }
         });
     }

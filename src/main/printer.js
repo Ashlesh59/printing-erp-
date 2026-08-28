@@ -678,26 +678,32 @@ class PrintQueueManager {
             console.error(`Print job failed:`, err);
             job.retryCount++;
             
+            const isCancelled = err.message && (
+                err.message.toLowerCase().includes('cancel') ||
+                err.message.toLowerCase().includes('abort')
+            );
+            
             if (job.id) {
-                db.prepare("UPDATE print_jobs SET retry_count = ?, error_message = ? WHERE id = ?").run(job.retryCount, err.message || String(err), job.id);
+                db.prepare("UPDATE print_jobs SET retry_count = ?, error_message = ? WHERE id = ?").run(job.retryCount, isCancelled ? 'Cancelled by user' : (err.message || String(err)), job.id);
             }
             if (job.auditId) {
-                db.prepare("UPDATE print_audit_logs SET error_message = ? WHERE id = ?").run(err.message || String(err), job.auditId);
+                db.prepare("UPDATE print_audit_logs SET error_message = ? WHERE id = ?").run(isCancelled ? 'Cancelled by user' : (err.message || String(err)), job.auditId);
             }
 
-            if (job.retryCount <= 3) {
+            if (job.retryCount <= 3 && !isCancelled) {
                 console.log(`Retrying job #${job.id} (Attempt ${job.retryCount}/3)...`);
                 this.isProcessing = false;
                 setTimeout(() => this.processNext(), 3000);
             } else {
+                const finalErrMsg = isCancelled ? 'Cancelled by user' : (err.message || String(err));
                 if (job.id) {
-                    db.prepare("UPDATE print_jobs SET status = 'Failed', error_message = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?").run(err.message || String(err), job.id);
+                    db.prepare("UPDATE print_jobs SET status = 'Failed', error_message = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?").run(finalErrMsg, job.id);
                 }
                 if (job.auditId) {
-                    db.prepare("UPDATE print_audit_logs SET status = 'Failed', error_message = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?").run(err.message || String(err), job.auditId);
+                    db.prepare("UPDATE print_audit_logs SET status = 'Failed', error_message = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?").run(finalErrMsg, job.auditId);
                 }
                 
-                eventBus.publish(EventTypes.PRINTER_JOB_FAILED, { jobId: job.id, printerName: job.printerName, orderId: job.orderId, error: err.message || String(err) }, { sourceModule: 'PrinterService' });
+                eventBus.publish(EventTypes.PRINTER_JOB_FAILED, { jobId: job.id, printerName: job.printerName, orderId: job.orderId, error: finalErrMsg }, { sourceModule: 'PrinterService' });
                 
                 this.queue.shift();
                 this.isProcessing = false;

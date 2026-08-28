@@ -223,8 +223,8 @@ function createWindow() {
     return ProductionModel.getJobs(filters, searchQuery);
   });
 
-  ipcMain.handle('production:getDashboardStats', () => {
-    return ProductionModel.getDashboardStats();
+  ipcMain.handle('production:getDashboardStats', (event, filters) => {
+    return ProductionModel.getDashboardStats(filters || {});
   });
 
   ipcMain.handle('production:createJob', (event, data) => {

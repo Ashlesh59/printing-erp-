@@ -17,7 +17,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Production Scheduling & Smart Print Queue API
   productionGetJobs: (filters, searchQuery) => ipcRenderer.invoke('production:getJobs', filters, searchQuery),
-  productionGetDashboardStats: () => ipcRenderer.invoke('production:getDashboardStats'),
+  productionGetDashboardStats: (filters) => ipcRenderer.invoke('production:getDashboardStats', filters),
   productionCreateJob: (data) => ipcRenderer.invoke('production:createJob', data),
   productionUpdateStatus: (jobId, status) => ipcRenderer.invoke('production:updateStatus', jobId, status),
   productionUpdatePriority: (jobId, priority) => ipcRenderer.invoke('production:updatePriority', jobId, priority),

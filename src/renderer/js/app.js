@@ -15,6 +15,15 @@ window.addEventListener('unhandledrejection', (event) => {
     event.preventDefault();
 });
 
+window.refreshAllWorkspaces = function() {
+    if (typeof window.loadDashboard === 'function') window.loadDashboard();
+    if (typeof window.loadOrderHistory === 'function') window.loadOrderHistory();
+    if (typeof window.loadCustomerWorkspace === 'function') window.loadCustomerWorkspace();
+    if (typeof window.loadProductionDashboard === 'function') window.loadProductionDashboard();
+    if (typeof window.loadProductionWorkspace === 'function') window.loadProductionWorkspace();
+    if (typeof window.loadProductionJobs === 'function') window.loadProductionJobs();
+};
+
 document.addEventListener('DOMContentLoaded', async () => {
     document.body.classList.remove('dark-mode');
     // ── DeskSolutions Splash Screen Loader Sequence ──
@@ -436,7 +445,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // (First version removed to avoid duplication - implementation is managed further down)
 
     // --- Dashboard Logic ---
-    async function loadDashboard() {
+    window.loadDashboard = async function loadDashboard() {
         if (!window.api || !window.api.getDashboardStats) return;
         
         try {
@@ -1657,7 +1666,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const ordersLimit = 50;
     let currentHistoryFilter = 'All';
 
-    async function loadOrderHistory(filter = 'All', append = false) {
+    window.loadOrderHistory = async function loadOrderHistory(filter = 'All', append = false) {
         if (!window.api || !window.api.getRecentOrders) return;
         
         const tbody = document.getElementById('history-table-body');

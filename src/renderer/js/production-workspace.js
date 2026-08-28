@@ -128,14 +128,39 @@
         await loadProductionJobs();
     }
 
+    function getDateRangeForView(view) {
+        const now = new Date();
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+        const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+        if (view === 'day') {
+            return { dateStart: start.toISOString(), dateEnd: end.toISOString() };
+        } else if (view === 'week') {
+            const dayOfWeek = start.getDay(); // 0 is Sunday
+            const diffToMonday = start.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1); 
+            const weekStart = new Date(now.getFullYear(), now.getMonth(), diffToMonday, 0, 0, 0);
+            const weekEnd = new Date(weekStart);
+            weekEnd.setDate(weekEnd.getDate() + 6);
+            weekEnd.setHours(23, 59, 59);
+            return { dateStart: weekStart.toISOString(), dateEnd: weekEnd.toISOString() };
+        } else if (view === 'month' || view === 'heatmap') {
+            const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+            const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+            return { dateStart: monthStart.toISOString(), dateEnd: monthEnd.toISOString() };
+        }
+        return {};
+    }
+
     async function loadProductionJobs() {
         if (!window.api || !window.api.productionGetJobs) return;
 
         try {
+            const dateRange = getDateRangeForView(activeCalView);
             const filters = {
                 status: statusFilter,
                 priority: priorityFilter,
-                printer: printerFilter
+                printer: printerFilter,
+                ...dateRange
             };
 
             const jobs = await window.api.productionGetJobs(filters, searchQuery);
@@ -165,6 +190,33 @@
             });
 
             loadedJobs = filtered;
+            
+            if (window.api.productionGetDashboardStats) {
+                const stats = await window.api.productionGetDashboardStats(filters);
+                if (stats) {
+                    const elJobs = document.getElementById('ps-kpi-jobs');
+                    const elTime = document.getElementById('ps-kpi-time');
+                    const elPages = document.getElementById('ps-kpi-pages');
+                    const elPrinters = document.getElementById('ps-kpi-printers');
+                    const elWaiting = document.getElementById('ps-kpi-waiting');
+                    const elPrinting = document.getElementById('ps-kpi-printing');
+                    const elCompleted = document.getElementById('ps-kpi-completed');
+                    
+                    if (elJobs) elJobs.textContent = stats.totalJobs || 0;
+                    if (elTime) {
+                        const totalMins = (stats.totalJobs || 0) * (stats.avgCompletionMinutes || 8);
+                        const hrs = Math.floor(totalMins / 60);
+                        const mins = totalMins % 60;
+                        elTime.textContent = `${hrs}h ${mins}m`;
+                    }
+                    if (elPages) elPages.textContent = (stats.totalPages || 0).toLocaleString();
+                    if (elPrinters) elPrinters.textContent = stats.printersActive || 0;
+                    if (elWaiting) elWaiting.textContent = stats.jobsWaiting || 0;
+                    if (elPrinting) elPrinting.textContent = stats.jobsPrinting || 0;
+                    if (elCompleted) elCompleted.textContent = stats.completedToday || 0;
+                }
+            }
+
             renderActiveCalendarView();
 
             if (selectedJobId) {
@@ -186,7 +238,7 @@
         switch (activeCalView) {
             case 'day': renderDayView(); break;
             case 'week': renderWeekView(); break;
-            case 'month': renderMonthHeatmapView(); break;
+            case 'month': renderMonthListView(); break;
             case 'heatmap': renderMonthHeatmapView(); break;
             default: renderDayView(); break;
         }
@@ -281,8 +333,8 @@
         if (loadedJobs.length === 0) {
             container.innerHTML = `
                 <div class="ps-empty-state-box">
-                    <div class="ps-empty-icon">📋</div>
-                    <h3 class="ps-empty-title">No Production Tasks Found</h3>
+                    <div class="ps-empty-icon">📅</div>
+                    <h3 class="ps-empty-title">No production scheduled for today.</h3>
                     <p class="ps-empty-desc">Click <strong>+ Schedule Production</strong> to add a new job to the queue.</p>
                 </div>
             `;
@@ -298,36 +350,95 @@
     }
 
     // ──────────────────────────────────────────────────────────────
-    // 2. WEEK VIEW (CLEAN 7 VERTICAL DAY COLUMNS WITH DRAG AND DROP)
+    // 2. WEEK VIEW (GROUPED BY DAY, COLLAPSIBLE)
     // ──────────────────────────────────────────────────────────────
     function renderWeekView() {
         const container = document.getElementById('ps-week-grid');
         if (!container) return;
 
-        const days = [
-            { name: 'Mon', full: 'Monday' },
-            { name: 'Tue', full: 'Tuesday' },
-            { name: 'Wed', full: 'Wednesday' },
-            { name: 'Thu', full: 'Thursday' },
-            { name: 'Fri', full: 'Friday' },
-            { name: 'Sat', full: 'Saturday' },
-            { name: 'Sun', full: 'Sunday' }
-        ];
+        if (loadedJobs.length === 0) {
+            container.innerHTML = `
+                <div class="ps-empty-state-box">
+                    <div class="ps-empty-icon">📅</div>
+                    <h3 class="ps-empty-title">No production scheduled for this week.</h3>
+                    <p class="ps-empty-desc">Click <strong>+ Schedule Production</strong> to add a new job to the queue.</p>
+                </div>
+            `;
+            return;
+        }
 
-        let html = `<div class="ps-week-columns-wrapper">`;
+        const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        const grouped = {};
+        days.forEach(d => grouped[d] = []);
 
-        days.forEach((d, idx) => {
-            const dayJobs = loadedJobs.filter((j, jIdx) => (jIdx % 7) === idx || (j.due_time && new Date(j.due_time).getDay() === (idx + 1) % 7));
-            const count = dayJobs.length;
+        loadedJobs.forEach(j => {
+            const date = new Date(j.scheduled_start || j.created_at);
+            let dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
+            if (grouped[dayName]) grouped[dayName].push(j);
+        });
 
+        let html = `<div class="ps-week-list-wrapper">`;
+        
+        days.forEach(d => {
+            const jobs = grouped[d];
             html += `
-                <div class="ps-week-column" data-day="${d.name}">
-                    <div class="ps-week-col-header">
-                        <div class="ps-col-title">${d.name}</div>
-                        <span class="ps-col-badge">${count} Jobs</span>
+                <div class="ps-date-group-section">
+                    <div class="ps-date-group-header" onclick="this.parentElement.classList.toggle('collapsed')">
+                        <span class="ps-group-title">${d}</span>
+                        <span class="ps-group-count">• ${jobs.length} Jobs</span>
+                        <span class="ps-group-chevron">▼</span>
                     </div>
-                    <div class="ps-week-col-cards-list">
-                        ${count === 0 ? `<div class="ps-col-empty">No Jobs</div>` : dayJobs.map(j => renderJobCardHtml(j)).join('')}
+                    <div class="ps-date-group-content">
+                        ${jobs.length === 0 ? `<div class="ps-col-empty">No Jobs</div>` : `<div class="ps-day-grid-container">${jobs.map(j => renderJobCardHtml(j)).join('')}</div>`}
+                    </div>
+                </div>
+            `;
+        });
+
+        html += `</div>`;
+        container.innerHTML = html;
+        bindCardDragAndDrop(container);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // 2.5 MONTH LIST VIEW (GROUPED BY DATE, COLLAPSIBLE)
+    // ──────────────────────────────────────────────────────────────
+    function renderMonthListView() {
+        const container = document.getElementById('ps-month-list');
+        if (!container) return;
+
+        if (loadedJobs.length === 0) {
+            container.innerHTML = `
+                <div class="ps-empty-state-box">
+                    <div class="ps-empty-icon">📅</div>
+                    <h3 class="ps-empty-title">No production scheduled this month.</h3>
+                    <p class="ps-empty-desc">Click <strong>+ Schedule Production</strong> to add a new job to the queue.</p>
+                </div>
+            `;
+            return;
+        }
+
+        const grouped = {};
+        loadedJobs.forEach(j => {
+            const date = new Date(j.scheduled_start || j.created_at);
+            const dateKey = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            if (!grouped[dateKey]) grouped[dateKey] = [];
+            grouped[dateKey].push(j);
+        });
+
+        let html = `<div class="ps-month-list-wrapper">`;
+        
+        Object.keys(grouped).forEach(dateKey => {
+            const jobs = grouped[dateKey];
+            html += `
+                <div class="ps-date-group-section">
+                    <div class="ps-date-group-header" onclick="this.parentElement.classList.toggle('collapsed')">
+                        <span class="ps-group-title">${dateKey}</span>
+                        <span class="ps-group-count">• ${jobs.length} Jobs</span>
+                        <span class="ps-group-chevron">▼</span>
+                    </div>
+                    <div class="ps-date-group-content">
+                        <div class="ps-day-grid-container">${jobs.map(j => renderJobCardHtml(j)).join('')}</div>
                     </div>
                 </div>
             `;
@@ -342,20 +453,62 @@
     // 3. MONTH HEATMAP VIEW
     // ──────────────────────────────────────────────────────────────
     function renderMonthHeatmapView() {
-        const container = document.getElementById('ps-month-heatmap');
+        const container = document.getElementById('ps-heatmap-calendar');
         if (!container) return;
 
+        if (loadedJobs.length === 0 && !statusFilter) {
+            container.innerHTML = `
+                <div class="ps-empty-state-box">
+                    <div class="ps-empty-icon">📅</div>
+                    <h3 class="ps-empty-title">No production has been scheduled yet.</h3>
+                    <p class="ps-empty-desc">Click <strong>+ Schedule Production</strong> to add a new job to the queue.</p>
+                </div>
+            `;
+            return;
+        }
+
+        // Generate current month days
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = now.getMonth();
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        
+        // Group loadedJobs by day of month
+        const dayCounts = {};
+        let dayMinutes = {};
+        loadedJobs.forEach(j => {
+            const date = new Date(j.scheduled_start || j.created_at);
+            if (date.getMonth() === month && date.getFullYear() === year) {
+                const day = date.getDate();
+                dayCounts[day] = (dayCounts[day] || 0) + 1;
+                // mock average time per job for heatmap
+                dayMinutes[day] = (dayMinutes[day] || 0) + 8; // approx 8 mins per job
+            }
+        });
+
         let html = `<div class="ps-heatmap-grid">`;
-        for (let day = 1; day <= 30; day++) {
-            const loadCount = (day % 3 === 0) ? 8 : (day % 2 === 0) ? 4 : 1;
-            const heatClass = loadCount >= 7 ? 'heavy' : loadCount >= 3 ? 'busy' : 'free';
-            const statusText = loadCount >= 7 ? '🔴 Heavy Workload' : loadCount >= 3 ? '🟠 Moderate' : '🟢 Light / Free';
+        for (let day = 1; day <= daysInMonth; day++) {
+            const loadCount = dayCounts[day] || 0;
+            const minutes = dayMinutes[day] || 0;
+            const hrs = Math.floor(minutes / 60);
+            const mins = minutes % 60;
+            const estTimeStr = `${hrs}h ${mins}m`;
+            
+            // Color Scale: Light Green (1-5), Yellow (6-15), Orange (16-30), Red (30+)
+            let heatClass = 'free';
+            if (loadCount >= 30) heatClass = 'red';
+            else if (loadCount >= 16) heatClass = 'orange';
+            else if (loadCount >= 6) heatClass = 'yellow';
+            else if (loadCount >= 1) heatClass = 'green';
+            else heatClass = 'free';
+
+            const tooltipHtml = loadCount > 0 ? `<div class="ps-heatmap-tooltip"><strong>${new Date(year, month, day).toLocaleDateString('en-US', {month: 'short', day: 'numeric'})}</strong><br/>${loadCount} Scheduled Jobs<br/>Estimated Print Time: ${estTimeStr}</div>` : '';
 
             html += `
-                <div class="ps-heatmap-cell ${heatClass}">
-                    <div class="ps-heat-day">Day ${day}</div>
-                    <div class="ps-heat-status">${statusText}</div>
-                    <div class="ps-heat-count">${loadCount} Jobs</div>
+                <div class="ps-heatmap-cell ${heatClass}" onclick="document.getElementById('ps-view-day').click();">
+                    <div class="ps-heat-day">${day}</div>
+                    ${loadCount > 0 ? `<div class="ps-heat-count">${loadCount} Jobs</div>` : ''}
+                    ${tooltipHtml}
                 </div>
             `;
         }

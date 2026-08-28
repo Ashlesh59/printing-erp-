@@ -1142,7 +1142,7 @@
                                         </button>
 
                                         <!-- ACTION 3: SCHEDULE PRINT (SECONDARY BUTTON) -->
-                                        <button id="btn-action-schedule" class="comp-btn comp-btn-secondary" onclick="if(window.openScheduleProductionModal) window.openScheduleProductionModal(); else { const m = document.getElementById('schedule-production-modal'); if(m) m.style.setProperty('display', 'flex', 'important'); }">
+                                        <button id="btn-action-schedule" class="comp-btn comp-btn-secondary" onclick="console.log('Schedule button clicked!'); try { if(window.openScheduleProductionModal) { console.log('Calling global modal opener'); window.openScheduleProductionModal(); } else { console.log('Global opener not found, opening manually'); const m = document.getElementById('schedule-production-modal'); if(m) m.style.setProperty('display', 'flex', 'important'); } } catch(e) { console.error('Error in inline onclick:', e); }">
                                             <div class="comp-btn-icon">📅</div>
                                             <div class="comp-btn-content">
                                                 <div class="comp-btn-title">SCHEDULE PRINT</div>
@@ -2569,27 +2569,37 @@
                             </div>
                         </div>
 
+                        <!-- 2.5 KPI DASHBOARD SUMMARY -->
+                        <div class="ps-kpi-dashboard" id="ps-kpi-dashboard">
+                            <div class="ps-kpi-card"><span class="ps-kpi-label">Jobs</span><span class="ps-kpi-val" id="ps-kpi-jobs">0</span></div>
+                            <div class="ps-kpi-card"><span class="ps-kpi-label">Est Time</span><span class="ps-kpi-val" id="ps-kpi-time">0h 0m</span></div>
+                            <div class="ps-kpi-card"><span class="ps-kpi-label">Pages</span><span class="ps-kpi-val" id="ps-kpi-pages">0</span></div>
+                            <div class="ps-kpi-card"><span class="ps-kpi-label">Printers</span><span class="ps-kpi-val" id="ps-kpi-printers">0</span></div>
+                            <div class="ps-kpi-card"><span class="ps-kpi-label">Waiting</span><span class="ps-kpi-val" id="ps-kpi-waiting">0</span></div>
+                            <div class="ps-kpi-card"><span class="ps-kpi-label">Printing</span><span class="ps-kpi-val" id="ps-kpi-printing">0</span></div>
+                            <div class="ps-kpi-card"><span class="ps-kpi-label">Completed</span><span class="ps-kpi-val" id="ps-kpi-completed">0</span></div>
+                        </div>
+
                         <!-- 3. CALENDAR VIEW PANES -->
                         <div class="ps-views-wrapper" id="ps-cal-views-wrapper" style="flex: 1; overflow-y: auto;">
-                            <!-- A. DAY VIEW (DEFAULT CALM TIMELINE AGENDA) -->
+                            <!-- A. DAY VIEW -->
                             <div class="ps-view-pane active" id="cal-pane-day">
-                                <div class="ps-day-timeline-container" id="ps-day-timeline-list">
-                                    <!-- Dynamic Vertical Agenda Events -->
-                                </div>
+                                <div class="ps-day-timeline-container" id="ps-day-timeline-list"></div>
                             </div>
 
-                            <!-- B. WEEK VIEW (APPLE CALENDAR STYLE) -->
+                            <!-- B. WEEK VIEW -->
                             <div class="ps-view-pane" id="cal-pane-week">
-                                <div class="ps-week-calendar-grid" id="ps-week-grid">
-                                    <!-- Dynamic 7-day time slots -->
-                                </div>
+                                <div class="ps-week-calendar-grid" id="ps-week-grid"></div>
                             </div>
 
-                            <!-- C. MONTH HEATMAP VIEW -->
+                            <!-- C. MONTH VIEW -->
                             <div class="ps-view-pane" id="cal-pane-month">
-                                <div class="ps-month-heatmap-container" id="ps-month-heatmap">
-                                    <!-- Dynamic Heatmap Calendar -->
-                                </div>
+                                <div class="ps-month-list-container" id="ps-month-list"></div>
+                            </div>
+
+                            <!-- D. HEATMAP VIEW -->
+                            <div class="ps-view-pane" id="cal-pane-heatmap">
+                                <div class="ps-heatmap-calendar-container" id="ps-heatmap-calendar"></div>
                             </div>
                         </div>
 
@@ -3826,6 +3836,7 @@
                 <button class="doc-action-secondary" id="doc-pagenums-cancel-btn" style="width:auto;padding:9px 20px;">Cancel</button>
                 <button class="doc-action-primary" id="doc-pagenums-apply-btn" style="width:auto;padding:9px 20px;">Add Numbers</button>
             </div>
+        </div>
     </div>
 
     <!-- PIN Lock Overlay Modal -->
@@ -4064,11 +4075,13 @@
                 <!-- Suggested Printer Card -->
                 <div style="background: rgba(99, 102, 241, 0.06); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 12px; padding: 12px;">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <div style="font-size: 0.72rem; font-weight: 800; color: var(--accent-color, #6366f1); text-transform: uppercase;">Suggested Printer</div>
-                            <strong id="sched-suggested-printer-name" style="font-size: 0.95rem;">EPSON L3210</strong>
+                        <div style="flex: 1;">
+                            <div style="font-size: 0.72rem; font-weight: 800; color: var(--accent-color, #6366f1); text-transform: uppercase;">Assigned Printer</div>
+                            <select id="sched-select-printer" class="ps-select" style="width: 100%; margin-top: 4px;">
+                                <option value="">Auto-Assign Best Available</option>
+                            </select>
                         </div>
-                        <span class="ps-badge-pill green">Lowest Queue</span>
+                        <span class="ps-badge-pill green" style="margin-left: 8px;">Lowest Queue</span>
                     </div>
                 </div>
 
