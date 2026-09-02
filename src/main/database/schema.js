@@ -166,15 +166,27 @@ function initDatabase() {
             name TEXT NOT NULL,
             role TEXT NOT NULL CHECK (role IN ('Admin', 'Manager', 'Operator')),
             pin TEXT NOT NULL,
+            pin_hash TEXT,
+            pin_salt TEXT,
+            pin_algo TEXT,
+            reset_required INTEGER DEFAULT 0,
+            failed_attempts INTEGER DEFAULT 0,
+            locked_until DATETIME,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     `);
 
-    // Seed default Admin if empty (PIN: 1234 stored as SHA-256 hash)
-    const userCount = db.prepare("SELECT COUNT(*) as count FROM users").get().count;
-    if (userCount === 0) {
-        const defaultPinHash = require('crypto').createHash('sha256').update('1234').digest('hex');
-        db.prepare("INSERT INTO users (name, role, pin) VALUES ('Admin', 'Admin', ?)").run(defaultPinHash);
+    // Helper columns check for legacy DBs
+    const userCols = [
+        `ALTER TABLE users ADD COLUMN pin_hash TEXT`,
+        `ALTER TABLE users ADD COLUMN pin_salt TEXT`,
+        `ALTER TABLE users ADD COLUMN pin_algo TEXT`,
+        `ALTER TABLE users ADD COLUMN reset_required INTEGER DEFAULT 0`,
+        `ALTER TABLE users ADD COLUMN failed_attempts INTEGER DEFAULT 0`,
+        `ALTER TABLE users ADD COLUMN locked_until DATETIME`
+    ];
+    for (const sql of userCols) {
+        try { db.exec(sql); } catch(e) {}
     }
 
     // Settings Table
@@ -239,9 +251,24 @@ function initDatabase() {
         CREATE TABLE IF NOT EXISTS license (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             license_key TEXT,
+            status TEXT DEFAULT 'UNACTIVATED',
+            expires_at DATETIME,
+            license_type TEXT,
+            meta_json TEXT,
             activated_on DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     `);
+
+    // Helper columns check for legacy DBs
+    const licenseCols = [
+        `ALTER TABLE license ADD COLUMN status TEXT DEFAULT 'UNACTIVATED'`,
+        `ALTER TABLE license ADD COLUMN expires_at DATETIME`,
+        `ALTER TABLE license ADD COLUMN license_type TEXT`,
+        `ALTER TABLE license ADD COLUMN meta_json TEXT`
+    ];
+    for (const sql of licenseCols) {
+        try { db.exec(sql); } catch(e) {}
+    }
 
     // Pricing Table
     db.exec(`

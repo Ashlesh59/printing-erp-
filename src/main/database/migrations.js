@@ -528,12 +528,7 @@ function runMigrations() {
             )
         `);
 
-        // Seed default Admin if empty
-        const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
-        if (userCount === 0) {
-            db.prepare("INSERT INTO users (name, role, pin) VALUES ('Admin', 'Admin', '1234')").run();
-            console.log("[Migration 7] Seeded default Admin user with PIN 1234.");
-        }
+        // Users are provisioned securely through the Setup Wizard with validated scrypt hashes
 
         // 2. Create order_items table
         db.exec(`
@@ -1127,6 +1122,66 @@ function runMigrations() {
             }
         } catch (err) {
             console.error("Migration 13 Seeding Error:", err);
+        }
+    });
+
+    // Migration 14: Phase 1 Security (Salted scrypt PINs, default reset, and license schema upgrade)
+    runMigration(14, 'Phase 1 Security & Authentication Hardening', () => {
+        const crypto = require('crypto');
+        
+        // 1. Safety Backup before migration
+        try {
+            const backupService = require('./services/backup-service');
+            if (backupService && typeof backupService.createSafetyBackup === 'function') {
+                backupService.createSafetyBackup('migration_14_security_hardening');
+            }
+        } catch(e) {
+            console.warn('[Migration 14] Safety backup notice:', e.message);
+        }
+
+        // 2. Add security columns to users table
+        const userCols = [
+            `ALTER TABLE users ADD COLUMN pin_hash TEXT`,
+            `ALTER TABLE users ADD COLUMN pin_salt TEXT`,
+            `ALTER TABLE users ADD COLUMN pin_algo TEXT`,
+            `ALTER TABLE users ADD COLUMN reset_required INTEGER DEFAULT 0`,
+            `ALTER TABLE users ADD COLUMN failed_attempts INTEGER DEFAULT 0`,
+            `ALTER TABLE users ADD COLUMN locked_until DATETIME`
+        ];
+        for (const colSql of userCols) {
+            try { db.exec(colSql); } catch(e) {}
+        }
+
+        // 3. Add license status and validation columns
+        const licenseCols = [
+            `ALTER TABLE license ADD COLUMN status TEXT DEFAULT 'UNACTIVATED'`,
+            `ALTER TABLE license ADD COLUMN expires_at DATETIME`,
+            `ALTER TABLE license ADD COLUMN license_type TEXT`,
+            `ALTER TABLE license ADD COLUMN meta_json TEXT`
+        ];
+        for (const colSql of licenseCols) {
+            try { db.exec(colSql); } catch(e) {}
+        }
+
+        // 4. Invalidate all default credentials & force reset
+        const defaultPins = ['1234', '5678', '0000', '1111', '123456', '654321', '000000', '111111'];
+        const defaultHashes = defaultPins.map(p => crypto.createHash('sha256').update(p).digest('hex').toLowerCase());
+
+        try {
+            const users = db.prepare('SELECT id, name, role, pin FROM users').all();
+            for (const user of users) {
+                const stored = String(user.pin || '').trim();
+                const isDefaultPlain = defaultPins.includes(stored);
+                const isDefaultSha256 = defaultHashes.includes(stored.toLowerCase());
+
+                if (isDefaultPlain || isDefaultSha256 || !stored) {
+                    // Force reset and nullify pin so default credentials can NEVER grant access
+                    db.prepare("UPDATE users SET pin = '', reset_required = 1 WHERE id = ?").run(user.id);
+                    console.log(`[Migration 14] User '${user.name}' (${user.role}) had default/blank credentials. Forced reset applied.`);
+                }
+            }
+        } catch (err) {
+            console.error('[Migration 14] Error checking default credentials:', err);
         }
     });
 }

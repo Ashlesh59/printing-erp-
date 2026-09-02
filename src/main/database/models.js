@@ -16,29 +16,23 @@ const ActivityModel = {
     }
 };
 
+const { LicenseService, LicenseState } = require('../security/license-service');
+const pinSecurity = require('../security/pin-security');
+const authThrottle = require('../security/auth-throttle');
+
 const LicenseModel = {
     getLicense: () => {
-        return db.prepare('SELECT * FROM license WHERE id = 1').get();
+        return LicenseService.getPublicLicenseInfo();
+    },
+    checkLicense: () => {
+        const status = LicenseService.checkLicenseStatus();
+        return status.valid === true;
+    },
+    checkLicenseStatus: () => {
+        return LicenseService.checkLicenseStatus();
     },
     activateLicense: (key) => {
-        if (!key || typeof key !== 'string') {
-            return { success: false, message: "License key is required." };
-        }
-        const cleanKey = key.trim().toUpperCase();
-        // Allow standard PSM-XXXX-XXXX-XXXX format or alphanumeric custom key (e.g. ASHLESH59)
-        const psmRegex = /^PSM-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
-        const customRegex = /^[A-Z0-9_-]{4,32}$/;
-        if (!psmRegex.test(cleanKey) && !customRegex.test(cleanKey)) {
-            return { success: false, message: "Invalid license format. Expected: PSM-XXXX-XXXX-XXXX or alphanumeric key." };
-        }
-        
-        try {
-            const stmt = db.prepare('INSERT OR REPLACE INTO license (id, license_key, activated_on) VALUES (1, ?, CURRENT_TIMESTAMP)');
-            stmt.run(cleanKey);
-            return { success: true, message: "License activated successfully!" };
-        } catch (error) {
-            return { success: false, message: "Database error during activation." };
-        }
+        return LicenseService.activateLicense(key);
     }
 };
 
@@ -909,77 +903,156 @@ const DeviceModel = {
     }
 };
 
-const crypto = require('crypto');
-
-function hashPin(pin) {
-    return crypto.createHash('sha256').update(String(pin)).digest('hex');
-}
-
 const UserModel = {
-    verifyPin: (rawPin) => {
+    verifyPin: async (rawPin, senderId, expectedRole = 'Any') => {
         try {
-            const hashed = hashPin(rawPin);
-            // First check if hashed pin matches
-            let user = db.prepare('SELECT id, name, role, pin FROM users WHERE pin = ?').get(hashed);
-            if (user) {
-                const { pin, ...userData } = user;
-                return { success: true, user: userData };
-            }
-            // Fallback for legacy unhashed PINs and auto-upgrade to SHA-256
-            user = db.prepare('SELECT id, name, role, pin FROM users WHERE pin = ?').get(String(rawPin));
-            if (user) {
-                try {
-                    db.prepare('UPDATE users SET pin = ? WHERE id = ?').run(hashed, user.id);
-                } catch(e) {}
-                const { pin, ...userData } = user;
-                return { success: true, user: userData };
-            }
-            // Emergency fallback for default Admin PIN 1234 if table is empty or unseeded
-            if (String(rawPin) === '1234') {
-                return { success: true, user: { id: 1, name: 'Admin', role: 'Admin' } };
-            }
-            if (String(rawPin) === '5678') {
-                return { success: true, user: { id: 2, name: 'Manager', role: 'Manager' } };
+            if (!rawPin || typeof rawPin !== 'string') {
+                return { success: false, error: "Security PIN is required." };
             }
 
-            return { success: false, error: "Invalid PIN" };
+            // 1. Check brute-force lockout
+            const lockoutCheck = authThrottle.isLocked(senderId, expectedRole);
+            if (lockoutCheck.locked) {
+                return {
+                    success: false,
+                    locked: true,
+                    remainingSeconds: lockoutCheck.remainingSeconds,
+                    error: `Terminal temporarily locked due to failed attempts. Please wait ${lockoutCheck.remainingSeconds} seconds.`
+                };
+            }
+
+            // 2. Reject known default PINs immediately
+            if (pinSecurity.isKnownDefaultPin(rawPin)) {
+                const throttle = authThrottle.recordFailure(senderId, expectedRole);
+                return {
+                    success: false,
+                    locked: throttle.locked,
+                    remainingSeconds: throttle.remainingSeconds,
+                    error: throttle.locked
+                        ? `Terminal locked for ${throttle.remainingSeconds} seconds.`
+                        : "Invalid security PIN."
+                };
+            }
+
+            // 3. Fetch potential users according to expected role
+            let users = [];
+            if (expectedRole === 'Admin') {
+                users = db.prepare("SELECT id, name, role, pin, reset_required FROM users WHERE role = 'Admin'").all();
+            } else if (expectedRole === 'Shop') {
+                users = db.prepare("SELECT id, name, role, pin, reset_required FROM users WHERE role IN ('Operator', 'Manager', 'Admin')").all();
+            } else {
+                users = db.prepare("SELECT id, name, role, pin, reset_required FROM users").all();
+            }
+
+            if (!users || users.length === 0) {
+                return { success: false, error: "No user accounts configured. Setup required." };
+            }
+
+            for (const user of users) {
+                // If account requires reset, standard access is blocked
+                if (user.reset_required === 1) {
+                    continue;
+                }
+
+                const check = await pinSecurity.verifyPin(rawPin, user.pin);
+                if (check.match) {
+                    authThrottle.recordSuccess(senderId, expectedRole);
+
+                    // Auto-upgrade legacy hash to modern salted scrypt
+                    if (check.needsRehash) {
+                        try {
+                            const newHash = await pinSecurity.hashPin(rawPin);
+                            db.prepare('UPDATE users SET pin = ? WHERE id = ?').run(newHash, user.id);
+                        } catch (e) {
+                            console.error("Failed to upgrade legacy hash:", e);
+                        }
+                    }
+
+                    const { pin, ...userData } = user;
+                    return { success: true, user: userData };
+                }
+            }
+
+            // Failed verification
+            const throttle = authThrottle.recordFailure(senderId, expectedRole);
+            return {
+                success: false,
+                locked: throttle.locked,
+                remainingSeconds: throttle.remainingSeconds,
+                error: throttle.locked
+                    ? `Terminal locked for ${throttle.remainingSeconds} seconds.`
+                    : "Invalid security PIN."
+            };
         } catch (e) {
             console.error("verifyPin error:", e);
-            return { success: false, error: e.message };
+            return { success: false, error: "Authentication system error." };
         }
     },
+
     getUsers: () => {
         try {
-            return db.prepare('SELECT id, name, role FROM users ORDER BY id ASC').all();
+            return db.prepare('SELECT id, name, role, reset_required FROM users ORDER BY id ASC').all();
         } catch (e) {
             console.error("getUsers error:", e);
             return [];
         }
     },
-    createUser: (name, role, rawPin) => {
+
+    createUser: async (name, role, rawPin) => {
         try {
+            if (!name || typeof name !== 'string' || name.trim() === '') {
+                return { success: false, error: "User name is required" };
+            }
             if (!['Admin', 'Manager', 'Operator'].includes(role)) {
                 return { success: false, error: "Invalid user role" };
             }
-            if (!/^\d{4}$/.test(String(rawPin))) {
-                return { success: false, error: "PIN must be exactly 4 digits" };
+            const validation = pinSecurity.validatePinComplexity(rawPin);
+            if (!validation.valid) {
+                return { success: false, error: validation.error };
             }
-            const hashed = hashPin(rawPin);
-            const stmt = db.prepare('INSERT INTO users (name, role, pin) VALUES (?, ?, ?)');
-            const res = stmt.run(name, role, hashed);
+            const hashed = await pinSecurity.hashPin(rawPin);
+            const stmt = db.prepare('INSERT INTO users (name, role, pin, reset_required) VALUES (?, ?, ?, 0)');
+            const res = stmt.run(name.trim(), role, hashed);
             return { success: true, id: res.lastInsertRowid };
         } catch (e) {
             console.error("createUser error:", e);
             return { success: false, error: e.message };
         }
     },
+
+    changePin: async (userId, oldPin, newPin) => {
+        try {
+            const user = db.prepare('SELECT id, pin, reset_required FROM users WHERE id = ?').get(userId);
+            if (!user) return { success: false, error: "User not found" };
+
+            // If reset is not required, verify old PIN
+            if (user.reset_required !== 1 && oldPin) {
+                const check = await pinSecurity.verifyPin(oldPin, user.pin);
+                if (!check.match) {
+                    return { success: false, error: "Current PIN is incorrect" };
+                }
+            }
+
+            const validation = pinSecurity.validatePinComplexity(newPin);
+            if (!validation.valid) {
+                return { success: false, error: validation.error };
+            }
+
+            const hashed = await pinSecurity.hashPin(newPin);
+            db.prepare('UPDATE users SET pin = ?, reset_required = 0 WHERE id = ?').run(hashed, userId);
+            return { success: true, message: "PIN updated successfully" };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    },
+
     deleteUser: (id) => {
         try {
             const user = db.prepare('SELECT role FROM users WHERE id = ?').get(id);
             if (user && user.role === 'Admin') {
-                const adminCount = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'Admin'").get().count;
+                const adminCount = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'Admin' AND reset_required = 0").get().count;
                 if (adminCount <= 1) {
-                    return { success: false, error: "Cannot delete the last Admin user" };
+                    return { success: false, error: "Cannot delete the last active Admin user" };
                 }
             }
             db.prepare('DELETE FROM users WHERE id = ?').run(id);
@@ -1262,8 +1335,39 @@ const PrintAuditLogModel = {
 const WizardModel = {
     executeWizardSetup: (data) => {
         try {
+            if (!data) return { success: false, error: "Setup data is required." };
+
+            // 1. Mandatory Secure PIN Validation
+            const adminPin = String(data.adminPin || '').trim();
+            const adminValidation = pinSecurity.validatePinComplexity(adminPin);
+            if (!adminValidation.valid) {
+                return { success: false, error: `Administrator PIN: ${adminValidation.error}` };
+            }
+
+            if (data.confirmAdminPin && String(data.confirmAdminPin).trim() !== adminPin) {
+                return { success: false, error: "Administrator PIN confirmation does not match." };
+            }
+
+            const operatorPin = String(data.managerPin || data.operatorPin || '').trim();
+            const opValidation = pinSecurity.validatePinComplexity(operatorPin);
+            if (!opValidation.valid) {
+                return { success: false, error: `Shop Operator PIN: ${opValidation.error}` };
+            }
+
+            if (data.confirmManagerPin && String(data.confirmManagerPin).trim() !== operatorPin) {
+                return { success: false, error: "Shop Operator PIN confirmation does not match." };
+            }
+
+            if (adminPin === operatorPin) {
+                return { success: false, error: "Administrator PIN and Shop Operator PIN must be different." };
+            }
+
+            // 2. Hash credentials using salted scrypt
+            const hashedAdmin = pinSecurity.hashPinSync(adminPin);
+            const hashedOperator = pinSecurity.hashPinSync(operatorPin);
+
             const transaction = db.transaction(() => {
-                // 1. Update Settings
+                // Update Settings
                 const shopName = data.businessName || data.shopName || 'My Print Shop';
                 const contact = data.phone || '';
                 const email = data.email || '';
@@ -1290,28 +1394,22 @@ const WizardModel = {
                     bwPrice, colorPrice, gstRate
                 );
 
-                // 2. Set Admin & Manager PINs
-                if (data.adminPin && /^\d{4}$/.test(String(data.adminPin))) {
-                    const hashedAdmin = hashPin(data.adminPin);
-                    const adminUser = db.prepare("SELECT id FROM users WHERE role = 'Admin' ORDER BY id ASC LIMIT 1").get();
-                    if (adminUser) {
-                        db.prepare("UPDATE users SET pin = ? WHERE id = ?").run(hashedAdmin, adminUser.id);
-                    } else {
-                        db.prepare("INSERT INTO users (name, role, pin) VALUES ('Admin', 'Admin', ?)").run(hashedAdmin);
-                    }
+                // Set Admin & Operator PINs
+                const adminUser = db.prepare("SELECT id FROM users WHERE role = 'Admin' ORDER BY id ASC LIMIT 1").get();
+                if (adminUser) {
+                    db.prepare("UPDATE users SET pin = ?, reset_required = 0 WHERE id = ?").run(hashedAdmin, adminUser.id);
+                } else {
+                    db.prepare("INSERT INTO users (name, role, pin, reset_required) VALUES ('Admin', 'Admin', ?, 0)").run(hashedAdmin);
                 }
 
-                if (data.managerPin && /^\d{4}$/.test(String(data.managerPin))) {
-                    const hashedMgr = hashPin(data.managerPin);
-                    const mgrUser = db.prepare("SELECT id FROM users WHERE role = 'Manager' ORDER BY id ASC LIMIT 1").get();
-                    if (mgrUser) {
-                        db.prepare("UPDATE users SET pin = ? WHERE id = ?").run(hashedMgr, mgrUser.id);
-                    } else {
-                        db.prepare("INSERT INTO users (name, role, pin) VALUES ('Manager', 'Manager', ?)").run(hashedMgr);
-                    }
+                const opUser = db.prepare("SELECT id FROM users WHERE role IN ('Manager', 'Operator') ORDER BY id ASC LIMIT 1").get();
+                if (opUser) {
+                    db.prepare("UPDATE users SET pin = ?, reset_required = 0 WHERE id = ?").run(hashedOperator, opUser.id);
+                } else {
+                    db.prepare("INSERT INTO users (name, role, pin, reset_required) VALUES ('Operator', 'Operator', ?, 0)").run(hashedOperator);
                 }
 
-                // 3. Populate Pricing List
+                // Populate Pricing List
                 const pricingList = [
                     { name: 'Standard A4 B&W', category: 'paper', color_type: 'bw', paper_size: 'A4', sides: 'Single', price: bwPrice },
                     { name: 'Standard A4 Color', category: 'paper', color_type: 'color', paper_size: 'A4', sides: 'Single', price: colorPrice }
@@ -1343,7 +1441,6 @@ const WizardModel = {
                     } catch(e) {}
                 }
 
-                // 4. Log Activity
                 ActivityModel.logActivity("Smart Business Setup Wizard completed successfully", "Setup");
                 return { success: true };
             });

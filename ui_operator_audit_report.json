@@ -1,0 +1,49 @@
+{
+  "timestamp": "2026-09-02T16:06:12.842Z",
+  "passed": [
+    {
+      "feature": "Shop Mode Entry",
+      "detail": "Role selected and main ERP dashboard mounted."
+    },
+    {
+      "feature": "Dashboard Complete KPI Suite",
+      "detail": "All 8 dashboard live metrics & doughnut chart elements present."
+    },
+    {
+      "feature": "Customer Creation API",
+      "detail": "Created customer ID: 155"
+    },
+    {
+      "feature": "Order Pipeline Execution",
+      "detail": "Order created successfully with ID: 509"
+    },
+    {
+      "feature": "Inventory Database Sync",
+      "detail": "Retrieved 11 inventory stock items."
+    },
+    {
+      "feature": "Customer CRM Database Sync",
+      "detail": "Retrieved 10 active customer profiles."
+    },
+    {
+      "feature": "Order History CRM Sync",
+      "detail": "Retrieved 10 historical billing orders."
+    },
+    {
+      "feature": "Doc Studio Storage Engine",
+      "detail": "Doc Studio project repository active."
+    },
+    {
+      "feature": "Budget Tracker",
+      "detail": "Budget Tracker container and accounting views active."
+    },
+    {
+      "feature": "Hardware & Settings Engine",
+      "detail": "Connected printers: 2, pricing matrix loaded, license verified."
+    }
+  ],
+  "uiBreaks": [],
+  "workflowBreaks": [],
+  "warnings": [],
+  "consoleErrors": []
+}

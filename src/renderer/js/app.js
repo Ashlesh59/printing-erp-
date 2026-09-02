@@ -132,80 +132,127 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    // License Check Logic
+    // License Check Logic (Fail Closed)
     const licenseScreen = document.getElementById('license-screen');
     const mainApp = document.getElementById('main-app');
+    const roleScreen = document.getElementById('role-selection-screen');
+    const licenseMessage = document.getElementById('license-message');
     
     try {
         if (window.api && window.api.checkLicense) {
             const hasLicense = await window.api.checkLicense();
-            const roleScreen = document.getElementById('role-selection-screen');
             if (hasLicense) {
-                if (roleScreen) roleScreen.style.display = 'flex';
+                if (licenseScreen) licenseScreen.classList.remove('active');
+                // Check if first-time wizard setup is needed
+                if (window.api.getSettings) {
+                    const settings = await window.api.getSettings();
+                    if (!settings || settings.has_setup !== 0) {
+                        if (roleScreen) roleScreen.style.display = 'flex';
+                    }
+                } else {
+                    if (roleScreen) roleScreen.style.display = 'flex';
+                }
             } else {
                 if (licenseScreen) licenseScreen.classList.add('active');
+                if (roleScreen) roleScreen.style.display = 'none';
             }
         } else {
-            console.warn("API not available, loading fallback role selection.");
-            const roleScreen = document.getElementById('role-selection-screen');
-            if (roleScreen) roleScreen.style.display = 'flex';
+            console.error("Critical Security Failure: API bridge unavailable. Terminal locked.");
+            if (licenseScreen) {
+                licenseScreen.classList.add('active');
+                if (licenseMessage) {
+                    licenseMessage.className = 'error-msg';
+                    licenseMessage.textContent = 'System Security Error: Secure API unavailable.';
+                }
+            }
+            if (roleScreen) roleScreen.style.display = 'none';
         }
     } catch (err) {
         console.error("Startup license check failed:", err);
-        const roleScreen = document.getElementById('role-selection-screen');
-        if (roleScreen) roleScreen.style.display = 'flex';
+        if (licenseScreen) {
+            licenseScreen.classList.add('active');
+            if (licenseMessage) {
+                licenseMessage.className = 'error-msg';
+                licenseMessage.textContent = 'License verification failed. Terminal locked.';
+            }
+        }
+        if (roleScreen) roleScreen.style.display = 'none';
     }
 
     // License Activation
     const activateBtn = document.getElementById('activate-btn');
     const licenseInput = document.getElementById('license-input');
-    const licenseMessage = document.getElementById('license-message');
 
     if (activateBtn) {
         activateBtn.addEventListener('click', async () => {
-            const key = licenseInput.value.trim();
+            const key = licenseInput ? licenseInput.value.trim() : '';
             if (!key) {
-                licenseMessage.textContent = "Please enter a license key.";
+                if (licenseMessage) {
+                    licenseMessage.className = 'error-msg';
+                    licenseMessage.textContent = "Please enter a valid license key.";
+                }
                 return;
             }
             
             const result = await window.api.activateLicense(key);
             if (result.success) {
-                licenseMessage.className = 'success-msg';
-                licenseMessage.textContent = result.message;
+                if (licenseMessage) {
+                    licenseMessage.className = 'success-msg';
+                    licenseMessage.textContent = result.message || 'License activated successfully!';
+                }
                 setTimeout(() => {
-                    licenseScreen.classList.remove('active');
-                    document.getElementById('role-selection-screen').style.display = 'flex';
-                }, 1000);
+                    if (licenseScreen) licenseScreen.classList.remove('active');
+                    if (roleScreen) roleScreen.style.display = 'flex';
+                }, 800);
             } else {
-                licenseMessage.className = 'error-msg';
-                licenseMessage.textContent = result.message;
+                if (licenseMessage) {
+                    licenseMessage.className = 'error-msg';
+                    licenseMessage.textContent = result.error || result.message || 'Activation failed.';
+                }
             }
         });
     }
 
-    // Role Selection Logic
+    // Role Selection Logic & Global Logout
     const roleBtns = document.querySelectorAll('.role-btn');
     const customerKiosk = document.getElementById('customer-kiosk-container');
     const adminContainer = document.getElementById('admin-container');
+
+    window.performLogout = async function() {
+        try {
+            if (window.api && window.api.logout) {
+                await window.api.logout();
+            }
+        } catch(e) {
+            console.error("Logout error:", e);
+        }
+
+        if (adminContainer) adminContainer.style.display = 'none';
+        if (mainApp) mainApp.style.display = 'none';
+        if (customerKiosk) customerKiosk.style.display = 'none';
+        if (roleScreen) roleScreen.style.display = 'flex';
+        if (window.showToast) window.showToast("Signed out successfully.", "info");
+    };
 
     roleBtns.forEach(btn => {
         btn.addEventListener('click', () => {
             const role = btn.getAttribute('data-role');
 
             if (role === 'admin') {
-                proceedToAdmin();
+                window.requestAccess(['Admin'], (user) => {
+                    openAdminView(user);
+                }, 'Admin');
             } else if (role === 'shop') {
-                proceedToShop();
+                window.requestAccess(['Operator', 'Manager', 'Admin'], (user) => {
+                    openShopView(user);
+                }, 'Shop');
             } else if (role === 'customer') {
                 proceedToCustomer();
             }
         });
     });
 
-    function proceedToShop() {
-        localStorage.setItem('psm_role', 'shop');
-        const roleScreen = document.getElementById('role-selection-screen');
+    function openShopView(user) {
         if (roleScreen) roleScreen.style.display = 'none';
         if (mainApp) mainApp.style.display = 'flex';
 
@@ -214,19 +261,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         executeTabSwitch(defaultBtn, savedTab);
     }
 
-    function proceedToCustomer() {
-        localStorage.setItem('psm_role', 'customer');
-        document.getElementById('role-selection-screen').style.display = 'none';
-        customerKiosk.style.display = 'block';
+    async function proceedToCustomer() {
+        try {
+            if (window.api && window.api.kioskLogin) {
+                await window.api.kioskLogin();
+            }
+        } catch(e) {
+            console.error("Kiosk auth error:", e);
+        }
+        if (roleScreen) roleScreen.style.display = 'none';
+        if (customerKiosk) customerKiosk.style.display = 'block';
         initCustomerKiosk();
     }
 
-    function proceedToAdmin() {
-        localStorage.setItem('psm_role', 'admin');
-        const roleScreen = document.getElementById('role-selection-screen');
+    function openAdminView(user) {
         if (roleScreen) roleScreen.style.display = 'none';
-        const kiosk = document.getElementById('customer-kiosk-container');
-        if (kiosk) kiosk.style.display = 'none';
+        if (customerKiosk) customerKiosk.style.display = 'none';
         if (mainApp) mainApp.style.display = 'none';
 
         if (adminContainer) {
@@ -248,11 +298,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const adminExitBtn = document.getElementById('admin-exit-btn');
     if (adminExitBtn) {
         adminExitBtn.addEventListener('click', () => {
-            localStorage.removeItem('psm_role');
-            localStorage.removeItem('psm_shop_tab');
-            localStorage.removeItem('psm_inventory_tab');
-            adminContainer.style.display = 'none';
-            document.getElementById('role-selection-screen').style.display = 'flex';
+            window.performLogout();
         });
     }
 
@@ -379,13 +425,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const kioskExitBtn = document.getElementById('kiosk-exit-btn');
     if (kioskExitBtn) {
         kioskExitBtn.addEventListener('click', () => {
-            localStorage.removeItem('psm_role');
-            localStorage.removeItem('psm_shop_tab');
-            localStorage.removeItem('psm_inventory_tab');
-            const kiosk = document.getElementById('customer-kiosk-container');
-            if (kiosk) kiosk.style.display = 'none';
-            const roleScreen = document.getElementById('role-selection-screen');
-            if (roleScreen) roleScreen.style.display = 'flex';
+            window.performLogout();
         });
     }
 
@@ -723,11 +763,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const shopExitBtn = document.getElementById('shop-exit-btn');
     if (shopExitBtn) {
         shopExitBtn.addEventListener('click', () => {
-            localStorage.removeItem('psm_role');
-            localStorage.removeItem('psm_shop_tab');
-            localStorage.removeItem('psm_inventory_tab');
-            document.getElementById('main-app').style.display = 'none';
-            document.getElementById('role-selection-screen').style.display = 'flex';
+            window.performLogout();
         });
     }
 
@@ -3316,84 +3352,48 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Ctrl+Shift+A for Emergency Role Reset (Exit Customer Kiosk / Return to Role Selection)
         if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'a') {
             e.preventDefault();
-            localStorage.removeItem('psm_role');
-            localStorage.removeItem('psm_shop_tab');
-            localStorage.removeItem('psm_inventory_tab');
-            const kiosk = document.getElementById('customer-kiosk-container');
-            if (kiosk) kiosk.style.display = 'none';
-            const mainApp = document.getElementById('main-app');
-            if (mainApp) mainApp.style.display = 'none';
-            const adminApp = document.getElementById('admin-container');
-            if (adminApp) adminApp.style.display = 'none';
-            
-            const roleScreen = document.getElementById('role-selection-screen');
-            if (roleScreen) roleScreen.style.display = 'flex';
-            if (window.showToast) window.showToast("Role mode reset. Select a role below.", "info");
+            window.performLogout();
         }
 
         // Escape to close
         if (e.key === 'Escape') {
             closeCommandPalette();
+            const pinModal = document.getElementById('pin-lock-modal');
+            if (pinModal && pinModal.classList.contains('active')) {
+                pinModal.classList.remove('active');
+                if (accessCancelCallback) accessCancelCallback();
+            }
         }
     });
 
     // === STATE RESTORATION AND RELOAD BUTTONS LOGIC ===
     async function restoreSavedState() {
-        const savedRole = localStorage.getItem('psm_role');
-        if (!savedRole) return false;
-
-        document.getElementById('role-selection-screen').style.display = 'none';
-
-        if (savedRole === 'shop') {
-            mainApp.style.display = 'flex';
-            let savedTab = localStorage.getItem('psm_shop_tab') || 'dashboard';
-
-            // Permitted directly
-
-            // Deactivate all views and buttons in Shop Mode
-            const shopViews = document.querySelectorAll('#main-app .view');
-            shopViews.forEach(v => v.classList.remove('active'));
-            const shopNavBtns = document.querySelectorAll('#main-app .nav-btn[data-target]');
-            shopNavBtns.forEach(b => b.classList.remove('active'));
-
-            // Activate saved tab
-            const targetView = document.getElementById(savedTab);
-            if (targetView) targetView.classList.add('active');
-            
-            const targetBtn = document.querySelector(`#main-app .nav-btn[data-target="${savedTab}"]`);
-            if (targetBtn) targetBtn.classList.add('active');
-
-            // Load data for saved tab
-            if (savedTab === 'dashboard') {
-                if (typeof loadDashboard === 'function') loadDashboard();
-            } else if (savedTab === 'incoming') {
-                if (typeof loadIncomingOrdersPage === 'function') loadIncomingOrdersPage();
-            } else if (savedTab === 'settings') {
-                loadSettings();
-                loadPricingTable();
-                if (typeof window.loadUserMgmt === 'function') window.loadUserMgmt();
-            } else if (savedTab === 'order-setup') {
-                if (typeof loadExtrasForOrderSetup === 'function') loadExtrasForOrderSetup();
-            } else if (savedTab === 'history') {
-                if (typeof loadOrderHistory === 'function') loadOrderHistory();
-            } else if (savedTab === 'customers') {
-                if (typeof loadCustomers === 'function') loadCustomers();
-            } else if (savedTab === 'inventory') {
-                const activeSubBtn = document.querySelector('.inv-sub-btn.active') || document.querySelector('.inv-sub-btn');
-                if (activeSubBtn) activeSubBtn.click();
-            } else if (savedTab === 'doc-studio') {
-                if (window.DocWorkspace && typeof window.DocWorkspace.init === 'function') {
-                    window.DocWorkspace.init();
-                }
+        if (!window.api || !window.api.getSession) return false;
+        try {
+            const session = await window.api.getSession();
+            if (!session || !session.authenticated) {
+                // Not authenticated — keep on role selection screen
+                return false;
             }
-        } else if (savedRole === 'admin') {
-            proceedToAdmin();
-            return true;
-        } else if (savedRole === 'customer') {
-            customerKiosk.style.display = 'block';
-            initCustomerKiosk();
+
+            if (roleScreen) roleScreen.style.display = 'none';
+
+            if (session.role === 'Admin') {
+                openAdminView(session.user);
+                return true;
+            } else if (session.role === 'Customer') {
+                if (customerKiosk) customerKiosk.style.display = 'block';
+                initCustomerKiosk();
+                return true;
+            } else {
+                // Operator or Manager
+                openShopView(session.user);
+                return true;
+            }
+        } catch(e) {
+            console.error("Failed to restore session state:", e);
+            return false;
         }
-        return true;
     }
 
     // Handle Reload action
@@ -3431,10 +3431,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Check if we just reloaded to show success toast
     if (localStorage.getItem('psm_just_reloaded') === 'true') {
         localStorage.removeItem('psm_just_reloaded');
-        // Wait briefly for app UI setup to stabilize
         setTimeout(() => {
             if (window.showToast) {
-                window.showToast("✨ App refreshed and database synced successfully!", "success");
+                window.showToast("✨ App refreshed and terminal state verified!", "success");
             }
         }, 600);
     }
@@ -3444,17 +3443,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     let accessSuccessCallback = null;
     let accessCancelCallback = null;
     let requiredAccessRoles = [];
+    let targetLoginRole = "Any";
+    let lockoutInterval = null;
 
-    window.requestAccess = function(roles, onSuccess, onCancel) {
+    window.requestAccess = function(roles, onSuccess, targetRole = 'Any', onCancel = null) {
         requiredAccessRoles = roles;
         accessSuccessCallback = onSuccess;
         accessCancelCallback = onCancel;
+        targetLoginRole = targetRole;
         
         const pinModal = document.getElementById('pin-lock-modal');
         if (pinModal) {
             pinModal.classList.add('active');
-            document.getElementById('pin-lock-message').textContent = `Please enter PIN to authenticate.`;
-            document.getElementById('pin-lock-message').style.color = 'var(--text-secondary)';
+            const msgEl = document.getElementById('pin-lock-message');
+            if (msgEl) {
+                msgEl.textContent = `Enter ${targetRole === 'Admin' ? 'Administrator' : 'Staff'} PIN to authenticate.`;
+                msgEl.style.color = 'var(--text-secondary)';
+            }
             window.clearPin();
             
             const hiddenInput = document.getElementById('pin-hidden-input');
@@ -3466,81 +3471,153 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     window.enterPinDigit = function(digit) {
-        if (pinBuffer.length < 4) {
+        if (lockoutInterval) return; // Locked out
+        if (pinBuffer.length < 12) {
             pinBuffer += digit;
-            updatePinBullets();
-            if (pinBuffer.length === 4) {
-                setTimeout(submitPin, 200);
-            }
+            updatePinDisplay();
+            const hiddenInput = document.getElementById('pin-hidden-input');
+            if (hiddenInput) hiddenInput.value = pinBuffer;
+        }
+    };
+
+    window.backspacePin = function() {
+        if (lockoutInterval) return;
+        if (pinBuffer.length > 0) {
+            pinBuffer = pinBuffer.slice(0, -1);
+            updatePinDisplay();
+            const hiddenInput = document.getElementById('pin-hidden-input');
+            if (hiddenInput) hiddenInput.value = pinBuffer;
         }
     };
 
     window.clearPin = function() {
+        if (lockoutInterval) return;
         pinBuffer = "";
-        updatePinBullets();
+        updatePinDisplay();
+        const hiddenInput = document.getElementById('pin-hidden-input');
+        if (hiddenInput) hiddenInput.value = "";
     };
 
-    function updatePinBullets() {
-        const bullets = document.querySelectorAll('.pin-bullet');
-        bullets.forEach((bullet, idx) => {
-            if (idx < pinBuffer.length) {
-                bullet.style.background = 'var(--accent-color)';
-                bullet.style.borderColor = 'var(--accent-color)';
-                bullet.style.transform = 'scale(1.1)';
-            } else {
-                bullet.style.background = 'transparent';
-                bullet.style.borderColor = 'var(--border-color)';
-                bullet.style.transform = 'scale(1)';
-            }
-        });
-    }
+    function updatePinDisplay() {
+        const track = document.getElementById('pin-display-track');
+        if (!track) return;
 
-    async function submitPin() {
-        if (pinBuffer.length !== 4) return;
-        
-        if (!window.api || !window.api.verifyPin) {
-            window.showToast("verifyPin API not found", "error");
+        if (pinBuffer.length === 0) {
+            track.innerHTML = `<span style="font-size: 0.85rem; color: rgba(255,255,255,0.3); letter-spacing: 2px;">• • • • • •</span>`;
             return;
         }
 
-        try {
-            const res = await window.api.verifyPin(pinBuffer);
-            if (res.success && res.user) {
-                const user = res.user;
-                if (requiredAccessRoles.includes(user.role)) {
-                    document.getElementById('pin-lock-modal').classList.remove('active');
-                    if (window.showToast) window.showToast(`Welcome, ${user.name} (${user.role})!`, "success");
-                    
-                    localStorage.setItem('psm_user_session', JSON.stringify({
-                        name: user.name,
-                        role: user.role,
-                        timestamp: Date.now()
-                    }));
+        let html = '';
+        for (let i = 0; i < pinBuffer.length; i++) {
+            html += `<span style="display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: var(--accent-color); margin: 0 4px; box-shadow: 0 0 8px rgba(79, 70, 229, 0.6); animation: popIn 0.15s ease;"></span>`;
+        }
+        track.innerHTML = html;
+    }
 
-                    if (accessSuccessCallback) accessSuccessCallback(user);
+    function startLockoutTimer(lockedUntil) {
+        const msgEl = document.getElementById('pin-lock-message');
+        const submitBtn = document.getElementById('pin-submit-btn');
+        if (submitBtn) submitBtn.disabled = true;
+
+        if (lockoutInterval) clearInterval(lockoutInterval);
+
+        function tick() {
+            const now = Date.now();
+            const remainingMs = lockedUntil - now;
+            if (remainingMs <= 0) {
+                clearInterval(lockoutInterval);
+                lockoutInterval = null;
+                if (submitBtn) submitBtn.disabled = false;
+                if (msgEl) {
+                    msgEl.textContent = 'Lockout expired. You may now enter your PIN.';
+                    msgEl.style.color = 'var(--text-secondary)';
+                }
+                window.clearPin();
+            } else {
+                const sec = Math.ceil(remainingMs / 1000);
+                if (msgEl) {
+                    msgEl.textContent = `⏳ Terminal locked. Please wait ${sec}s...`;
+                    msgEl.style.color = '#ef4444';
+                }
+            }
+        }
+
+        tick();
+        lockoutInterval = setInterval(tick, 1000);
+    }
+
+    window.submitPin = async function() {
+        if (lockoutInterval) return;
+
+        if (pinBuffer.length < 6) {
+            const msgEl = document.getElementById('pin-lock-message');
+            if (msgEl) {
+                msgEl.textContent = "PIN must be at least 6 digits.";
+                msgEl.style.color = '#ef4444';
+            }
+            return;
+        }
+        
+        if (!window.api || !window.api.login) {
+            window.showToast("Authentication API unavailable", "error");
+            return;
+        }
+
+        const msgEl = document.getElementById('pin-lock-message');
+        const submitBtn = document.getElementById('pin-submit-btn');
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Verifying...';
+        }
+
+        try {
+            const res = await window.api.login(pinBuffer, targetLoginRole);
+            if (res.success && res.session) {
+                const user = res.session.user;
+                document.getElementById('pin-lock-modal').classList.remove('active');
+                if (window.showToast) window.showToast(`Welcome, ${user.name} (${res.session.role})!`, "success");
+
+                window.clearPin();
+                if (accessSuccessCallback) accessSuccessCallback(user);
+            } else {
+                if (res.lockedUntil) {
+                    startLockoutTimer(res.lockedUntil);
                 } else {
-                    document.getElementById('pin-lock-message').textContent = `Access Denied: ${user.role} role unauthorized.`;
-                    document.getElementById('pin-lock-message').style.color = '#ef4444';
+                    if (msgEl) {
+                        msgEl.textContent = res.error || "Invalid PIN. Access denied.";
+                        msgEl.style.color = '#ef4444';
+                    }
                     window.clearPin();
                 }
-            } else {
-                document.getElementById('pin-lock-message').textContent = `Invalid PIN. Default Admin PIN is 1234.`;
-                document.getElementById('pin-lock-message').style.color = '#ef4444';
-                window.clearPin();
             }
         } catch(e) {
             console.error("PIN check failed:", e);
+            if (msgEl) {
+                msgEl.textContent = "Authentication error. Please try again.";
+                msgEl.style.color = '#ef4444';
+            }
+            window.clearPin();
+        } finally {
+            if (submitBtn && !lockoutInterval) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Unlock 🔓';
+            }
         }
-    }
+    };
 
     const hiddenPinInput = document.getElementById('pin-hidden-input');
     if (hiddenPinInput) {
         hiddenPinInput.addEventListener('input', (e) => {
+            if (lockoutInterval) return;
             const val = e.target.value.replace(/\D/g, '');
-            pinBuffer = val.slice(0, 4);
-            updatePinBullets();
-            if (pinBuffer.length === 4) {
-                setTimeout(submitPin, 200);
+            pinBuffer = val.slice(0, 12);
+            updatePinDisplay();
+        });
+
+        hiddenPinInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                window.submitPin();
             }
         });
     }
@@ -3550,7 +3627,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         pinModalOverlay.addEventListener('click', (e) => {
             if (e.target.tagName !== 'BUTTON') {
                 const hiddenInput = document.getElementById('pin-hidden-input');
-                if (hiddenInput) hiddenInput.focus();
+                if (hiddenInput && !lockoutInterval) hiddenInput.focus();
             }
         });
     }
@@ -3558,7 +3635,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     const pinCancelBtn = document.getElementById('pin-cancel-btn');
     if (pinCancelBtn) {
         pinCancelBtn.addEventListener('click', () => {
+            if (lockoutInterval) {
+                clearInterval(lockoutInterval);
+                lockoutInterval = null;
+            }
             document.getElementById('pin-lock-modal').classList.remove('active');
+            window.clearPin();
             if (accessCancelCallback) accessCancelCallback();
         });
     }
@@ -3577,24 +3659,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             btn.addEventListener('click', () => {
                 window.clearPin();
             });
+        } else if (text === '⌫') {
+            btn.removeAttribute('onclick');
+            btn.addEventListener('click', () => {
+                window.backspacePin();
+            });
         } else if (text === 'Cancel') {
             btn.removeAttribute('onclick');
         }
     });
-
-    function getActiveUserSession() {
-        try {
-            const sessionStr = localStorage.getItem('psm_user_session');
-            if (!sessionStr) return null;
-            const session = JSON.parse(sessionStr);
-            const maxAge = 15 * 60 * 1000; 
-            if (Date.now() - session.timestamp < maxAge) {
-                return session;
-            }
-            localStorage.removeItem('psm_user_session');
-        } catch(e) {}
-        return null;
-    }
 
     // === USER MANAGEMENT (SETTINGS TAB) ===
     window.loadUserMgmt = async function() {
@@ -3604,7 +3677,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         try {
             const users = await window.api.getUsers();
-            if (users.length === 0) {
+            if (!users || !Array.isArray(users) || users.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="3" class="empty-state" style="text-align: center;">No users found.</td></tr>';
                 return;
             }
@@ -3666,8 +3739,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (elMsg) { elMsg.textContent = "Name is required."; elMsg.style.color = "#ef4444"; }
                 return;
             }
-            if (!/^\d{4}$/.test(pin)) {
-                if (elMsg) { elMsg.textContent = "PIN must be exactly 4 digits."; elMsg.style.color = "#ef4444"; }
+            if (!/^\d{6,12}$/.test(pin)) {
+                if (elMsg) { elMsg.textContent = "PIN must be between 6 and 12 digits."; elMsg.style.color = "#ef4444"; }
                 return;
             }
 
@@ -3693,7 +3766,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // Call restore saved state
+    // Call restore saved state safely
     restoreSavedState();
 
     // =========================================================================

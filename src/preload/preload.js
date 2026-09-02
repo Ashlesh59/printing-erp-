@@ -180,9 +180,14 @@ contextBridge.exposeInMainWorld('api', {
   docBatchProcess:   (filePaths, operation, params)  => ipcRenderer.invoke('doc-batch-process', filePaths, operation, params),
 
   // Security & User administration
+  login:             (pin, role)                     => ipcRenderer.invoke('auth:login', { pin, role }),
+  logout:            ()                              => ipcRenderer.invoke('auth:logout'),
+  getSession:        ()                              => ipcRenderer.invoke('auth:get-session'),
+  kioskLogin:        ()                              => ipcRenderer.invoke('auth:kiosk-login'),
   verifyPin:         (pin)                           => ipcRenderer.invoke('verify-pin', pin),
   getUsers:          ()                              => ipcRenderer.invoke('get-users'),
   createUser:        (name, role, pin)               => ipcRenderer.invoke('create-user', { name, role, pin }),
+  changePin:         (userId, oldPin, newPin)        => ipcRenderer.invoke('change-pin', { userId, oldPin, newPin }),
   deleteUser:        (id)                            => ipcRenderer.invoke('delete-user', id),
 
   // Database Security & Recovery

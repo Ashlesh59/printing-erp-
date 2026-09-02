@@ -211,10 +211,12 @@ async function processOrder(order) {
 //  IPC Handlers
 // ──────────────────────────────────────────────────────────────
 function setupCloudIPC() {
-    ipcMain.handle('get-cloud-settings', () => getCloudSettings());
+    const { ROLES, registerGuardedHandler } = require('./security/ipc-guard');
+
+    registerGuardedHandler('get-cloud-settings', ROLES.ADMIN, () => getCloudSettings());
 
     // Renderer sends { url, key, id, vercel }
-    ipcMain.handle('update-cloud-settings', (event, { url, key, id, vercel }) => {
+    registerGuardedHandler('update-cloud-settings', ROLES.ADMIN, (event, { url, key, id, vercel }) => {
         updateCloudSettings(url, key, id, vercel);
         return { success: true };
     });

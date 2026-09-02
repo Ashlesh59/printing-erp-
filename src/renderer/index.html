@@ -327,19 +327,39 @@
                 <!-- Step 8: Staff & Security PINs -->
                 <div class="wizard-step-pane" data-step="8">
                     <div class="wizard-pane-header">
-                        <h2>Staff Security PINs</h2>
-                        <p>Set 4-digit security PINs to control access to Admin & Manager modes.</p>
+                        <h2>Staff Security Credentials</h2>
+                        <p>Configure secure PINs (minimum 6 digits, non-sequential) to protect terminal access.</p>
                     </div>
 
-                    <div class="wizard-form-grid" style="max-width: 500px; margin: 0 auto;">
-                        <div class="wizard-field">
-                            <label>Administrator PIN (4 digits) *</label>
-                            <input type="password" maxlength="4" id="wz-pin-admin" placeholder="****" value="1234">
+                    <div class="wizard-form-grid" style="max-width: 550px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px;">
+                        <div style="background: rgba(255,255,255,0.03); padding: 16px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">
+                            <h4 style="margin: 0 0 12px 0; color: var(--accent-color); font-size: 0.95rem;">👑 Administrator Access</h4>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                                <div class="wizard-field" style="margin: 0;">
+                                    <label>Admin PIN (6-12 digits) *</label>
+                                    <input type="password" maxlength="12" id="wz-pin-admin" placeholder="Min 6 digits" autocomplete="new-password">
+                                </div>
+                                <div class="wizard-field" style="margin: 0;">
+                                    <label>Confirm Admin PIN *</label>
+                                    <input type="password" maxlength="12" id="wz-pin-admin-confirm" placeholder="Re-enter Admin PIN" autocomplete="new-password">
+                                </div>
+                            </div>
                         </div>
-                        <div class="wizard-field">
-                            <label>Manager PIN (4 digits)</label>
-                            <input type="password" maxlength="4" id="wz-pin-manager" placeholder="****" value="5678">
+
+                        <div style="background: rgba(255,255,255,0.03); padding: 16px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">
+                            <h4 style="margin: 0 0 12px 0; color: #10b981; font-size: 0.95rem;">🏬 Shop Operator Access</h4>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                                <div class="wizard-field" style="margin: 0;">
+                                    <label>Operator PIN (6-12 digits) *</label>
+                                    <input type="password" maxlength="12" id="wz-pin-manager" placeholder="Min 6 digits" autocomplete="new-password">
+                                </div>
+                                <div class="wizard-field" style="margin: 0;">
+                                    <label>Confirm Operator PIN *</label>
+                                    <input type="password" maxlength="12" id="wz-pin-manager-confirm" placeholder="Re-enter Operator PIN" autocomplete="new-password">
+                                </div>
+                            </div>
                         </div>
+                        <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 0; text-align: center;">Note: Sequential series (e.g. 123456) and repeating digits (e.g. 111111) are blocked for safety.</p>
                     </div>
                 </div>
 
@@ -1799,8 +1819,8 @@
                                     </select>
                                 </div>
                                 <div class="form-group" style="margin-bottom: 16px;">
-                                    <label>4-Digit PIN</label>
-                                    <input type="password" id="new-user-pin" maxlength="4" placeholder="e.g. 5678" style="-webkit-text-security: disc;">
+                                    <label>Security PIN (6-12 digits)</label>
+                                    <input type="password" id="new-user-pin" maxlength="12" placeholder="Min 6 digits" style="-webkit-text-security: disc;">
                                 </div>
                                 <button class="action-btn" id="new-user-submit-btn" style="background-color: var(--accent-color); color: white; width: 100%; justify-content: center; font-weight: 600;">
                                     Create User
@@ -3841,33 +3861,35 @@
 
     <!-- PIN Lock Overlay Modal -->
     <div id="pin-lock-modal" class="overlay" style="z-index: 999999 !important;">
-        <div class="modal-card" style="max-width: 340px; background: rgba(22, 22, 33, 0.85); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 16px; box-shadow: var(--modal-shadow); padding: 32px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative;">
-            <div style="font-size: 2.2rem; margin-bottom: 12px;">🔒</div>
-            <h3 style="margin: 0 0 8px 0; font-size: 1.25rem; font-weight: 700; color: #fff; text-align: center;">Enter Security PIN</h3>
-            <p id="pin-lock-message" style="margin: 0 0 24px 0; font-size: 0.85rem; color: rgba(255, 255, 255, 0.6); text-align: center;">Authorized staff only</p>
+        <div class="modal-card" style="max-width: 360px; background: rgba(22, 22, 33, 0.95); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 16px; box-shadow: var(--modal-shadow); padding: 28px 24px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative;">
+            <div style="font-size: 2.2rem; margin-bottom: 8px;">🔒</div>
+            <h3 style="margin: 0 0 4px 0; font-size: 1.25rem; font-weight: 700; color: #fff; text-align: center;">Enter Security PIN</h3>
+            <p id="pin-lock-message" style="margin: 0 0 16px 0; font-size: 0.85rem; color: rgba(255, 255, 255, 0.7); text-align: center; min-height: 20px;">Authorized staff only</p>
             
-            <div class="pin-bullets" style="display: flex; gap: 16px; margin-bottom: 24px;">
-                <span class="pin-bullet" style="width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border-color); background: transparent; transition: all 0.2s;"></span>
-                <span class="pin-bullet" style="width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border-color); background: transparent; transition: all 0.2s;"></span>
-                <span class="pin-bullet" style="width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border-color); background: transparent; transition: all 0.2s;"></span>
-                <span class="pin-bullet" style="width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border-color); background: transparent; transition: all 0.2s;"></span>
+            <div id="pin-display-track" style="display: flex; gap: 8px; margin-bottom: 20px; align-items: center; justify-content: center; min-height: 24px;">
+                <!-- Dynamically populated PIN bullets -->
             </div>
             
-            <input type="password" id="pin-hidden-input" maxlength="4" style="position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0;" autofocus>
+            <input type="password" id="pin-hidden-input" maxlength="12" style="position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0;" autofocus>
             
-            <div class="pin-keypad" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; width: 100%;">
-                <button class="keypad-btn" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; width: 60px; height: 60px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; margin: auto; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('1')">1</button>
-                <button class="keypad-btn" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; width: 60px; height: 60px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; margin: auto; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('2')">2</button>
-                <button class="keypad-btn" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; width: 60px; height: 60px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; margin: auto; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('3')">3</button>
-                <button class="keypad-btn" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; width: 60px; height: 60px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; margin: auto; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('4')">4</button>
-                <button class="keypad-btn" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; width: 60px; height: 60px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; margin: auto; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('5')">5</button>
-                <button class="keypad-btn" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; width: 60px; height: 60px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; margin: auto; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('6')">6</button>
-                <button class="keypad-btn" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; width: 60px; height: 60px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; margin: auto; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('7')">7</button>
-                <button class="keypad-btn" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; width: 60px; height: 60px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; margin: auto; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('8')">8</button>
-                <button class="keypad-btn" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; width: 60px; height: 60px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; margin: auto; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('9')">9</button>
-                <button class="keypad-btn" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 50%; width: 60px; height: 60px; font-size: 1.1rem; font-weight: 600; color: #ef4444; cursor: pointer; transition: background 0.15s; margin: auto; display: flex; align-items: center; justify-content: center;" onclick="window.clearPin()">Clear</button>
-                <button class="keypad-btn" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; width: 60px; height: 60px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; margin: auto; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('0')">0</button>
-                <button class="keypad-btn" style="background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 50%; width: 60px; height: 60px; font-size: 0.95rem; font-weight: bold; color: var(--text-secondary); cursor: pointer; transition: background 0.15s; margin: auto; display: flex; align-items: center; justify-content: center;" id="pin-cancel-btn">Cancel</button>
+            <div class="pin-keypad" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; width: 100%;">
+                <button class="keypad-btn" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; height: 52px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('1')">1</button>
+                <button class="keypad-btn" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; height: 52px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('2')">2</button>
+                <button class="keypad-btn" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; height: 52px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('3')">3</button>
+                <button class="keypad-btn" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; height: 52px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('4')">4</button>
+                <button class="keypad-btn" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; height: 52px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('5')">5</button>
+                <button class="keypad-btn" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; height: 52px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('6')">6</button>
+                <button class="keypad-btn" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; height: 52px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('7')">7</button>
+                <button class="keypad-btn" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; height: 52px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('8')">8</button>
+                <button class="keypad-btn" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; height: 52px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('9')">9</button>
+                <button class="keypad-btn" style="background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 12px; height: 52px; font-size: 0.95rem; font-weight: 600; color: #ef4444; cursor: pointer; transition: background 0.15s; display: flex; align-items: center; justify-content: center;" onclick="window.clearPin()">Clear</button>
+                <button class="keypad-btn" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; height: 52px; font-size: 1.3rem; font-weight: 600; color: #fff; cursor: pointer; transition: background 0.15s; display: flex; align-items: center; justify-content: center;" onclick="window.enterPinDigit('0')">0</button>
+                <button class="keypad-btn" style="background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 12px; height: 52px; font-size: 1.1rem; font-weight: 600; color: #f59e0b; cursor: pointer; transition: background 0.15s; display: flex; align-items: center; justify-content: center;" onclick="window.backspacePin()">⌫</button>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; width: 100%; margin-top: 14px;">
+                <button class="action-btn" style="margin: 0; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; font-size: 0.9rem; font-weight: 600; color: var(--text-secondary); cursor: pointer; height: 42px; display: flex; align-items: center; justify-content: center;" id="pin-cancel-btn">Cancel</button>
+                <button class="action-btn" style="margin: 0; background: var(--accent-color); border: none; border-radius: 8px; font-size: 0.95rem; font-weight: 700; color: #fff; cursor: pointer; height: 42px; display: flex; align-items: center; justify-content: center;" id="pin-submit-btn" onclick="window.submitPin()">Unlock 🔓</button>
             </div>
         </div>
     </div>

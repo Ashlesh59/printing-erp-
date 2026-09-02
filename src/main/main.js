@@ -159,246 +159,321 @@ function createWindow() {
   if (!global.ipcHandlersRegistered) {
     global.ipcHandlersRegistered = true;
 
-    // IPC Handlers for License
-    ipcMain.handle('check-license', () => {
-    const license = LicenseModel.getLicense();
-    return !!(license && license.license_key);
-  });
+    const sessionManager = require('./security/session-manager');
+    const { ROLES, registerGuardedHandler } = require('./security/ipc-guard');
+    const { LicenseService, LicenseState } = require('./security/license-service');
+    const pinSecurity = require('./security/pin-security');
+    const authThrottle = require('./security/auth-throttle');
 
-  ipcMain.handle('activate-license', (event, key) => {
-    return LicenseModel.activateLicense(key);
-  });
+    // ==========================================
+    // AUTHENTICATION & SESSION IPC HANDLERS
+    // ==========================================
+    registerGuardedHandler('auth:login', ROLES.PUBLIC, async (event, { pin, role = 'Any' }) => {
+      const senderId = event.sender ? event.sender.id : null;
+      const result = await UserModel.verifyPin(pin, senderId, role);
+      if (!result.success) {
+        return result;
+      }
+      const sessionRole = role === 'Shop' ? (result.user.role || 'Operator') : (role === 'Admin' ? 'Admin' : result.user.role);
+      const session = sessionManager.createSession(event.sender, result.user, sessionRole);
+      return {
+        success: true,
+        session: {
+          role: session.role,
+          user: session.user,
+          authenticatedAt: session.authenticatedAt
+        }
+      };
+    });
 
-  ipcMain.handle('get-license-info', () => {
-    return LicenseModel.getLicense();
-  });
+    registerGuardedHandler('auth:kiosk-login', ROLES.PUBLIC, async (event) => {
+      const session = sessionManager.createKioskSession(event.sender);
+      return {
+        success: true,
+        session: {
+          role: session.role,
+          user: session.user,
+          authenticatedAt: session.authenticatedAt
+        }
+      };
+    });
 
-  // IPC Handlers for Customers
-  ipcMain.handle('search-customers', (event, phone) => {
-    return CustomerModel.searchByPhone(phone);
-  });
+    registerGuardedHandler('auth:get-session', ROLES.PUBLIC, async (event) => {
+      const session = sessionManager.getSession(event.sender);
+      if (!session) {
+        return { authenticated: false, role: null, user: null };
+      }
+      return {
+        authenticated: true,
+        role: session.role,
+        user: session.user,
+        authenticatedAt: session.authenticatedAt
+      };
+    });
 
-  ipcMain.handle('create-customer', (event, data) => {
-    return CustomerModel.createCustomer(data);
-  });
+    registerGuardedHandler('auth:logout', ROLES.PUBLIC, async (event) => {
+      sessionManager.destroySession(event.sender);
+      return { success: true };
+    });
 
-  ipcMain.handle('update-customer-profile', (event, id, data) => {
-    return CustomerModel.updateCustomer(id, data);
-  });
+    // Backwards-compatible PIN verify wrapper
+    registerGuardedHandler('verify-pin', ROLES.PUBLIC, async (event, pin) => {
+      const senderId = event.sender ? event.sender.id : null;
+      return await UserModel.verifyPin(pin, senderId);
+    });
 
-  ipcMain.handle('get-all-customers', (event, limit, offset) => {
-    return CustomerModel.getAllCustomers(limit, offset);
-  });
+    // ==========================================
+    // LICENSE IPC HANDLERS (Fail-Closed)
+    // ==========================================
+    registerGuardedHandler('check-license', ROLES.PUBLIC, () => {
+      const status = LicenseService.checkLicenseStatus();
+      return status.valid === true;
+    });
 
-  ipcMain.handle('search-customers-advanced', (event, opts = {}) => {
-    const { query = '', tag = 'All', sortBy = 'last_visit', limit = 50, offset = 0 } = opts;
-    return CustomerModel.searchCustomersAdvanced(query, tag, sortBy, limit, offset);
-  });
+    registerGuardedHandler('activate-license', ROLES.PUBLIC, (event, key) => {
+      return LicenseService.activateLicense(key);
+    });
 
-  ipcMain.handle('get-customer-profile', (event, customerId) => {
-    return CustomerModel.getCustomerProfile(customerId);
-  });
+    registerGuardedHandler('get-license-info', ROLES.PUBLIC, () => {
+      return LicenseService.getPublicLicenseInfo();
+    });
 
-  ipcMain.handle('add-customer-note', (event, customerId, note, author) => {
-    return CustomerModel.addNote(customerId, note, author);
-  });
+    // ==========================================
+    // CUSTOMER MANAGEMENT (OPERATOR+)
+    // ==========================================
+    registerGuardedHandler('search-customers', ROLES.OPERATOR, (event, phone) => {
+      return CustomerModel.searchByPhone(phone);
+    });
 
-  ipcMain.handle('delete-customer-note', (event, noteId) => {
-    return CustomerModel.deleteNote(noteId);
-  });
+    registerGuardedHandler('create-customer', ROLES.OPERATOR, (event, data) => {
+      return CustomerModel.createCustomer(data);
+    });
 
-  ipcMain.handle('add-customer-document', (event, customerId, orderId, fileName, filePath, fileSize, category) => {
-    return CustomerModel.addDocument(customerId, orderId, fileName, filePath, fileSize, category);
-  });
+    registerGuardedHandler('update-customer-profile', ROLES.OPERATOR, (event, id, data) => {
+      return CustomerModel.updateCustomer(id, data);
+    });
 
-  ipcMain.handle('duplicate-order-for-customer', (event, orderId) => {
-    return CustomerModel.duplicateOrder(orderId);
-  });
+    registerGuardedHandler('get-all-customers', ROLES.OPERATOR, (event, limit, offset) => {
+      return CustomerModel.getAllCustomers(limit, offset);
+    });
 
-  // Production Scheduling & Smart Print Queue IPC Handlers
-  const ProductionModel = require('./database/production-model');
-  const SmartScheduler = require('./smart-scheduler');
+    registerGuardedHandler('search-customers-advanced', ROLES.OPERATOR, (event, opts = {}) => {
+      const { query = '', tag = 'All', sortBy = 'last_visit', limit = 50, offset = 0 } = opts;
+      return CustomerModel.searchCustomersAdvanced(query, tag, sortBy, limit, offset);
+    });
 
-  ipcMain.handle('production:getJobs', (event, filters, searchQuery) => {
-    return ProductionModel.getJobs(filters, searchQuery);
-  });
+    registerGuardedHandler('get-customer-profile', ROLES.OPERATOR, (event, customerId) => {
+      return CustomerModel.getCustomerProfile(customerId);
+    });
 
-  ipcMain.handle('production:getDashboardStats', (event, filters) => {
-    return ProductionModel.getDashboardStats(filters || {});
-  });
+    registerGuardedHandler('add-customer-note', ROLES.OPERATOR, (event, customerId, note, author) => {
+      return CustomerModel.addNote(customerId, note, author);
+    });
 
-  ipcMain.handle('production:createJob', (event, data) => {
-    return ProductionModel.createJob(data);
-  });
+    registerGuardedHandler('delete-customer-note', ROLES.ADMIN, (event, noteId) => {
+      return CustomerModel.deleteNote(noteId);
+    });
 
-  ipcMain.handle('production:updateStatus', (event, jobId, status) => {
-    return ProductionModel.updateStatus(jobId, status);
-  });
+    registerGuardedHandler('add-customer-document', ROLES.OPERATOR, (event, customerId, orderId, fileName, filePath, fileSize, category) => {
+      return CustomerModel.addDocument(customerId, orderId, fileName, filePath, fileSize, category);
+    });
 
-  ipcMain.handle('production:updatePriority', (event, jobId, priority) => {
-    return ProductionModel.updatePriority(jobId, priority);
-  });
+    registerGuardedHandler('duplicate-order-for-customer', ROLES.OPERATOR, (event, orderId) => {
+      return CustomerModel.duplicateOrder(orderId);
+    });
 
-  ipcMain.handle('production:assignPrinter', (event, jobId, printerName) => {
-    return ProductionModel.assignPrinter(jobId, printerName);
-  });
+    // ==========================================
+    // PRODUCTION QUEUE & SCHEDULING (OPERATOR+)
+    // ==========================================
+    const ProductionModel = require('./database/production-model');
+    const SmartScheduler = require('./smart-scheduler');
 
-  ipcMain.handle('production:reorderQueue', (event, orderedJobIds) => {
-    return ProductionModel.reorderQueue(orderedJobIds);
-  });
+    registerGuardedHandler('production:getJobs', ROLES.OPERATOR, (event, filters, searchQuery) => {
+      return ProductionModel.getJobs(filters, searchQuery);
+    });
 
-  ipcMain.handle('production:moveUp', (event, jobId) => {
-    return ProductionModel.moveJobUp(jobId);
-  });
+    registerGuardedHandler('production:getDashboardStats', ROLES.OPERATOR, (event, filters) => {
+      return ProductionModel.getDashboardStats(filters || {});
+    });
 
-  ipcMain.handle('production:moveDown', (event, jobId) => {
-    return ProductionModel.moveJobDown(jobId);
-  });
+    registerGuardedHandler('production:createJob', ROLES.OPERATOR, (event, data) => {
+      return ProductionModel.createJob(data);
+    });
 
-  ipcMain.handle('production:recommendPrinter', (event, jobSpecs) => {
-    return SmartScheduler.recommendPrinter(jobSpecs);
-  });
+    registerGuardedHandler('production:updateStatus', ROLES.OPERATOR, (event, jobId, status) => {
+      return ProductionModel.updateStatus(jobId, status);
+    });
 
-  ipcMain.handle('production:duplicateJob', (event, jobId) => {
-    return ProductionModel.duplicateJob(jobId);
-  });
+    registerGuardedHandler('production:updatePriority', ROLES.OPERATOR, (event, jobId, priority) => {
+      return ProductionModel.updatePriority(jobId, priority);
+    });
 
-  ipcMain.handle('production:deleteJob', (event, jobId) => {
-    return ProductionModel.deleteJob(jobId);
-  });
+    registerGuardedHandler('production:assignPrinter', ROLES.OPERATOR, (event, jobId, printerName) => {
+      return ProductionModel.assignPrinter(jobId, printerName);
+    });
 
-  ipcMain.handle('production:scheduleJob', (event, jobId, scheduleData) => {
-    return ProductionModel.scheduleJob(jobId, scheduleData);
-  });
+    registerGuardedHandler('production:reorderQueue', ROLES.OPERATOR, (event, orderedJobIds) => {
+      return ProductionModel.reorderQueue(orderedJobIds);
+    });
 
-  // IPC Handlers for Orders
-  ipcMain.handle('create-order', (event, data) => {
-    return OrderModel.createOrder(data);
-  });
+    registerGuardedHandler('production:moveUp', ROLES.OPERATOR, (event, jobId) => {
+      return ProductionModel.moveJobUp(jobId);
+    });
 
-  ipcMain.handle('get-order-item-specifications', (event, orderItemId) => {
-    return OrderModel.getOrderItemSpecifications(orderItemId);
-  });
+    registerGuardedHandler('production:moveDown', ROLES.OPERATOR, (event, jobId) => {
+      return ProductionModel.moveJobDown(jobId);
+    });
 
-  ipcMain.handle('get-recent-orders', (event, limit, offset) => {
-    return OrderModel.getRecentOrders(limit, offset);
-  });
+    registerGuardedHandler('production:recommendPrinter', ROLES.OPERATOR, (event, jobSpecs) => {
+      return SmartScheduler.recommendPrinter(jobSpecs);
+    });
 
-  ipcMain.handle('get-dashboard-stats', () => {
-    return OrderModel.getDashboardStats();
-  });
+    registerGuardedHandler('production:duplicateJob', ROLES.OPERATOR, (event, jobId) => {
+      return ProductionModel.duplicateJob(jobId);
+    });
 
-  ipcMain.handle('get-customer-orders', (event, customerId) => {
-    return OrderModel.getOrdersByCustomer(customerId);
-  });
+    registerGuardedHandler('production:deleteJob', ROLES.ADMIN, (event, jobId) => {
+      return ProductionModel.deleteJob(jobId);
+    });
 
-  ipcMain.handle('update-order-status', (event, id, status) => {
-    return OrderModel.updateOrderStatus(id, status);
-  });
+    registerGuardedHandler('production:scheduleJob', ROLES.OPERATOR, (event, jobId, scheduleData) => {
+      return ProductionModel.scheduleJob(jobId, scheduleData);
+    });
 
-  // IPC Handlers for Activities
-  ipcMain.handle('get-recent-activities', () => {
-    return ActivityModel.getRecentActivities();
-  });
+    // ==========================================
+    // ORDER MANAGEMENT (OPERATOR+)
+    // ==========================================
+    registerGuardedHandler('create-order', ROLES.OPERATOR, (event, data) => {
+      return OrderModel.createOrder(data);
+    });
 
-  ipcMain.handle('log-activity', (event, desc, type) => {
-    return ActivityModel.logActivity(desc, type);
-  });
+    registerGuardedHandler('get-order-item-specifications', ROLES.OPERATOR, (event, orderItemId) => {
+      return OrderModel.getOrderItemSpecifications(orderItemId);
+    });
 
-  // IPC Handlers for Users / PIN security
-  ipcMain.handle('verify-pin', (event, pin) => {
-    return UserModel.verifyPin(pin);
-  });
-  ipcMain.handle('get-users', () => {
-    return UserModel.getUsers();
-  });
-  ipcMain.handle('create-user', (event, data) => {
-    return UserModel.createUser(data.name, data.role, data.pin);
-  });
-  ipcMain.handle('delete-user', (event, id) => {
-    return UserModel.deleteUser(id);
-  });
+    registerGuardedHandler('get-recent-orders', ROLES.OPERATOR, (event, limit, offset) => {
+      return OrderModel.getRecentOrders(limit, offset);
+    });
 
-  // IPC Handlers for Workflow Engine
-  ipcMain.handle('get-workflow-steps', () => {
-    return WorkflowModel.getSteps();
-  });
-  ipcMain.handle('update-workflow-steps', (event, steps) => {
-    return WorkflowModel.updateSteps(steps);
-  });
-  ipcMain.handle('reset-workflow-steps', () => {
-    return WorkflowModel.resetSteps();
-  });
+    registerGuardedHandler('get-dashboard-stats', ROLES.OPERATOR, () => {
+      return OrderModel.getDashboardStats();
+    });
 
-  // IPC Handlers for Pricing
-  ipcMain.handle('get-all-pricing', () => PricingModel.getAll());
-  ipcMain.handle('get-pricing', () => PricingModel.getAll()); // alias for renderer convenience
-  ipcMain.handle('get-pricing-by-category', (event, category) => PricingModel.getByCategory(category));
-  ipcMain.handle('create-pricing', (event, data) => PricingModel.create(data));
-  ipcMain.handle('update-pricing', (event, id, data) => PricingModel.update(id, data));
-  ipcMain.handle('delete-pricing', (event, id) => PricingModel.delete(id));
+    registerGuardedHandler('get-customer-orders', ROLES.OPERATOR, (event, customerId) => {
+      return OrderModel.getOrdersByCustomer(customerId);
+    });
 
-  // IPC Handlers for File Selection
-  ipcMain.handle('select-files', async () => {
-    const { dialog } = require('electron');
-    const fs = require('fs');
-    const mainWindow = BrowserWindow.getAllWindows()[0];
-    const result = await dialog.showOpenDialog(mainWindow, {
+    registerGuardedHandler('update-order-status', ROLES.OPERATOR, (event, id, status) => {
+      return OrderModel.updateOrderStatus(id, status);
+    });
+
+    // ==========================================
+    // ACTIVITIES & AUDIT (OPERATOR+)
+    // ==========================================
+    registerGuardedHandler('get-recent-activities', ROLES.OPERATOR, () => {
+      return ActivityModel.getRecentActivities();
+    });
+
+    registerGuardedHandler('log-activity', ROLES.OPERATOR, (event, desc, type) => {
+      return ActivityModel.logActivity(desc, type);
+    });
+
+    // ==========================================
+    // USER & CREDENTIAL MANAGEMENT (ADMIN ONLY)
+    // ==========================================
+    registerGuardedHandler('get-users', ROLES.ADMIN, () => {
+      return UserModel.getUsers();
+    });
+
+    registerGuardedHandler('create-user', ROLES.ADMIN, async (event, data) => {
+      return await UserModel.createUser(data.name, data.role, data.pin);
+    });
+
+    registerGuardedHandler('change-pin', ROLES.ADMIN, async (event, data) => {
+      return await UserModel.changePin(data.userId, data.oldPin, data.newPin);
+    });
+
+    registerGuardedHandler('delete-user', ROLES.ADMIN, (event, id) => {
+      return UserModel.deleteUser(id);
+    });
+
+    // ==========================================
+    // WORKFLOW ENGINE
+    // ==========================================
+    registerGuardedHandler('get-workflow-steps', ROLES.OPERATOR, () => {
+      return WorkflowModel.getSteps();
+    });
+
+    registerGuardedHandler('update-workflow-steps', ROLES.ADMIN, (event, steps) => {
+      return WorkflowModel.updateSteps(steps);
+    });
+
+    registerGuardedHandler('reset-workflow-steps', ROLES.ADMIN, () => {
+      return WorkflowModel.resetSteps();
+    });
+
+    // ==========================================
+    // PRICING MANAGEMENT
+    // ==========================================
+    registerGuardedHandler('get-all-pricing', ROLES.OPERATOR, () => PricingModel.getAll());
+    registerGuardedHandler('get-pricing', ROLES.OPERATOR, () => PricingModel.getAll());
+    registerGuardedHandler('get-pricing-by-category', ROLES.OPERATOR, (event, category) => PricingModel.getByCategory(category));
+    registerGuardedHandler('create-pricing', ROLES.ADMIN, (event, data) => PricingModel.create(data));
+    registerGuardedHandler('update-pricing', ROLES.ADMIN, (event, id, data) => PricingModel.update(id, data));
+    registerGuardedHandler('delete-pricing', ROLES.ADMIN, (event, id) => PricingModel.delete(id));
+
+    // ==========================================
+    // FILE SELECTION & CUSTOMER SUBMISSION
+    // ==========================================
+    registerGuardedHandler('select-files', ROLES.OPERATOR, async () => {
+      const { dialog } = require('electron');
+      const mainWindow = BrowserWindow.getAllWindows()[0];
+      const result = await dialog.showOpenDialog(mainWindow, {
         properties: ['openFile', 'multiSelections'],
         filters: [{ name: 'Supported Files', extensions: ['pdf', 'jpg', 'jpeg', 'png'] }]
-    });
-    
-    // Restore focus to window to prevent Windows focus loss bug
-    if (mainWindow) {
+      });
+      
+      if (mainWindow) {
         mainWindow.focus();
         mainWindow.webContents.focus();
-    }
-    
-    if (result.canceled) return [];
-    
-    return result.filePaths.map(p => {
+      }
+      
+      if (result.canceled) return [];
+      
+      return result.filePaths.map(p => {
         const stats = fs.statSync(p);
         return {
-            name: path.basename(p),
-            path: p,
-            size: stats.size,
-            ext: path.extname(p).toLowerCase(),
-            addedAt: new Date().toISOString()
+          name: path.basename(p),
+          path: p,
+          size: stats.size,
+          ext: path.extname(p).toLowerCase(),
+          addedAt: new Date().toISOString()
         };
+      });
     });
-  });
 
-  ipcMain.handle('open-incoming-folder', async () => {
-    const { shell } = require('electron');
-    const os = require('os');
-    const incomingPath = path.join(os.homedir(), 'Documents', 'PrintShop', 'IncomingFiles');
-    // Ensure it exists before opening
-    const fs = require('fs');
-    if (!fs.existsSync(incomingPath)) {
+    registerGuardedHandler('open-incoming-folder', ROLES.OPERATOR, async () => {
+      const { shell } = require('electron');
+      const incomingPath = path.join(os.homedir(), 'Documents', 'PrintShop', 'IncomingFiles');
+      if (!fs.existsSync(incomingPath)) {
         fs.mkdirSync(incomingPath, { recursive: true });
-    }
-    await shell.openPath(incomingPath);
-  });
+      }
+      await shell.openPath(incomingPath);
+    });
 
-  // IPC Handlers for Devices
-  ipcMain.handle('get-devices', () => {
-    return DeviceModel.getAllDevices();
-  });
+    registerGuardedHandler('get-devices', ROLES.OPERATOR, () => {
+      return DeviceModel.getAllDevices();
+    });
 
-  ipcMain.handle('save-customer-order-file', async (event, fileData) => {
-    const fs = require('fs');
-    const path = require('path');
-    const os = require('os');
-    try {
+    // Customer safe upload (CUSTOMER+)
+    registerGuardedHandler('save-customer-order-file', ROLES.CUSTOMER, async (event, fileData) => {
+      try {
         const incomingPath = path.join(os.homedir(), 'Documents', 'PrintShop', 'IncomingFiles');
         if (!fs.existsSync(incomingPath)) {
-            fs.mkdirSync(incomingPath, { recursive: true });
+          fs.mkdirSync(incomingPath, { recursive: true });
         }
         
-        // Handle array buffer from renderer
         const buffer = Buffer.from(fileData.bytes);
-        
-        // Prevent collisions
         const timestamp = Date.now();
         const ext = path.extname(fileData.name);
         const basename = path.basename(fileData.name, ext);
@@ -406,492 +481,481 @@ function createWindow() {
         const filePath = path.join(incomingPath, safeName);
         
         fs.writeFileSync(filePath, buffer);
-        
         return { success: true, path: filePath, name: safeName };
-    } catch(e) {
+      } catch(e) {
         return { success: false, error: e.message };
-    }
-  });
-
-  // IPC Handlers for Settings & Printers
-  ipcMain.handle('get-settings', () => {
-    return SettingsModel.getSettings();
-  });
-
-  ipcMain.handle('update-settings', (event, data) => {
-    return SettingsModel.updateSettings(data);
-  });
-
-  ipcMain.handle('complete-wizard-setup', (event, data) => {
-    return WizardModel.executeWizardSetup(data);
-  });
-
-  ipcMain.handle('get-printers', async () => {
-    try {
-      const targetWin = BrowserWindow.getAllWindows()[0];
-      return targetWin ? await targetWin.webContents.getPrintersAsync() : [];
-    } catch (err) {
-      console.error("[Main] Error fetching system printers:", err);
-      return [];
-    }
-  });
-
-  // IPC Handlers for Backup
-  ipcMain.handle('select-backup-folder', async () => {
-    const { dialog } = require('electron');
-    const result = await dialog.showOpenDialog(BrowserWindow.getAllWindows()[0], {
-        properties: ['openDirectory']
+      }
     });
-    return result.canceled ? null : result.filePaths[0];
-  });
 
-  ipcMain.handle('backup-database', async (event, destPath) => {
-    const backupService = require('./database/services/backup-service');
-    return await backupService.performBackup('manual');
-  });
+    // ==========================================
+    // SETTINGS & SETUP WIZARD
+    // ==========================================
+    registerGuardedHandler('get-settings', ROLES.PUBLIC, () => {
+      return SettingsModel.getSettings();
+    });
 
-  ipcMain.handle('get-db-health', () => {
-    const backupService = require('./database/services/backup-service');
-    return backupService.getDatabaseHealth();
-  });
+    registerGuardedHandler('update-settings', ROLES.ADMIN, (event, data) => {
+      return SettingsModel.updateSettings(data);
+    });
 
-  ipcMain.handle('get-backup-history', () => {
-    const backupService = require('./database/services/backup-service');
-    return backupService.getBackupHistory();
-  });
+    registerGuardedHandler('complete-wizard-setup', ROLES.PUBLIC, (event, data) => {
+      return WizardModel.executeWizardSetup(data);
+    });
 
-  ipcMain.handle('trigger-manual-backup', async () => {
-    const backupService = require('./database/services/backup-service');
-    return await backupService.performBackup('manual');
-  });
+    registerGuardedHandler('get-printers', ROLES.OPERATOR, async () => {
+      try {
+        const targetWin = BrowserWindow.getAllWindows()[0];
+        return targetWin ? await targetWin.webContents.getPrintersAsync() : [];
+      } catch (err) {
+        console.error("[Main] Error fetching system printers:", err);
+        return [];
+      }
+    });
 
-  ipcMain.handle('verify-backup', (event, filePath) => {
-    const backupService = require('./database/services/backup-service');
-    return backupService.verifyBackupFile(filePath);
-  });
+    // ==========================================
+    // BACKUP & RECOVERY (ADMIN ONLY)
+    // ==========================================
+    registerGuardedHandler('select-backup-folder', ROLES.ADMIN, async () => {
+      const { dialog } = require('electron');
+      const result = await dialog.showOpenDialog(BrowserWindow.getAllWindows()[0], {
+        properties: ['openDirectory']
+      });
+      return result.canceled ? null : result.filePaths[0];
+    });
 
-  ipcMain.handle('delete-backup', (event, filePath) => {
-    const backupService = require('./database/services/backup-service');
-    return backupService.deleteBackupFile(filePath);
-  });
+    registerGuardedHandler('backup-database', ROLES.ADMIN, async (event, destPath) => {
+      const backupService = require('./database/services/backup-service');
+      return await backupService.performBackup('manual');
+    });
 
-  ipcMain.handle('restore-backup', async (event, filePath) => {
-    const backupService = require('./database/services/backup-service');
-    return await backupService.restoreBackup(filePath);
-  });
+    registerGuardedHandler('get-db-health', ROLES.ADMIN, () => {
+      const backupService = require('./database/services/backup-service');
+      return backupService.getDatabaseHealth();
+    });
 
-  ipcMain.handle('is-db-corrupted', () => {
-    return !!global.isDatabaseCorrupted;
-  });
+    registerGuardedHandler('get-backup-history', ROLES.ADMIN, () => {
+      const backupService = require('./database/services/backup-service');
+      return backupService.getBackupHistory();
+    });
 
-  ipcMain.handle('recovery-restore', async (event, filePath) => {
-    const backupService = require('./database/services/backup-service');
-    return await backupService.restoreBackup(filePath);
-  });
+    registerGuardedHandler('trigger-manual-backup', ROLES.ADMIN, async () => {
+      const backupService = require('./database/services/backup-service');
+      return await backupService.performBackup('manual');
+    });
 
-  ipcMain.handle('recovery-fresh-db', async () => {
-    const fs = require('fs');
-    const dbService = require('./database/db');
-    const schema = require('./database/schema');
-    try {
+    registerGuardedHandler('verify-backup', ROLES.ADMIN, (event, filePath) => {
+      const backupService = require('./database/services/backup-service');
+      return backupService.verifyBackupFile(filePath);
+    });
+
+    registerGuardedHandler('delete-backup', ROLES.ADMIN, (event, filePath) => {
+      const backupService = require('./database/services/backup-service');
+      return backupService.deleteBackupFile(filePath);
+    });
+
+    registerGuardedHandler('restore-backup', ROLES.ADMIN, async (event, filePath) => {
+      const backupService = require('./database/services/backup-service');
+      return await backupService.restoreBackup(filePath);
+    });
+
+    registerGuardedHandler('is-db-corrupted', ROLES.PUBLIC, () => {
+      return !!global.isDatabaseCorrupted;
+    });
+
+    registerGuardedHandler('recovery-restore', ROLES.ADMIN, async (event, filePath) => {
+      const backupService = require('./database/services/backup-service');
+      return await backupService.restoreBackup(filePath);
+    });
+
+    registerGuardedHandler('recovery-fresh-db', ROLES.ADMIN, async () => {
+      const dbService = require('./database/db');
+      const schema = require('./database/schema');
+      try {
         dbService.close();
         const dbPath = dbService.dbPath;
         const corruptedPath = dbPath + `.corrupted_${Date.now()}`;
         if (fs.existsSync(dbPath)) {
-            fs.renameSync(dbPath, corruptedPath);
+          fs.renameSync(dbPath, corruptedPath);
         }
         dbService.reopen();
 
         global.isDatabaseCorrupted = false;
         schema.initDatabase();
         return { success: true };
-    } catch(err) {
+      } catch(err) {
         console.error("Fresh DB creation failed:", err);
         return { success: false, error: err.message };
-    }
-  });
+      }
+    });
 
-  ipcMain.handle('create-safety-backup', async (event, op) => {
-    const backupService = require('./database/services/backup-service');
-    return await backupService.createSafetyBackup(op);
-  });
+    registerGuardedHandler('create-safety-backup', ROLES.ADMIN, async (event, op) => {
+      const backupService = require('./database/services/backup-service');
+      return await backupService.createSafetyBackup(op);
+    });
 
-  ipcMain.handle('commit-safety-backup', (event, op) => {
-    const backupService = require('./database/services/backup-service');
-    return backupService.commitSafetyBackup(op);
-  });
+    registerGuardedHandler('commit-safety-backup', ROLES.ADMIN, (event, op) => {
+      const backupService = require('./database/services/backup-service');
+      return backupService.commitSafetyBackup(op);
+    });
 
-  ipcMain.handle('rollback-safety-backup', async (event, op) => {
-    const backupService = require('./database/services/backup-service');
-    return await backupService.rollbackSafetyBackup(op);
-  });
+    registerGuardedHandler('rollback-safety-backup', ROLES.ADMIN, async (event, op) => {
+      const backupService = require('./database/services/backup-service');
+      return await backupService.rollbackSafetyBackup(op);
+    });
 
-  ipcMain.handle('print-file', async (event, payload, options) => {
-    const settings = SettingsModel.getSettings();
-    let printerName = settings ? settings.default_printer : null;
-    
-    // Auto printer selection depending on target roles
-    if (options && options.role) {
+    // ==========================================
+    // PRINTING SERVICES (OPERATOR+)
+    // ==========================================
+    registerGuardedHandler('print-file', ROLES.OPERATOR, async (event, payload, options) => {
+      const settings = SettingsModel.getSettings();
+      let printerName = settings ? settings.default_printer : null;
+      
+      if (options && options.role) {
         if (options.role === 'receipt') {
-            printerName = settings.receipt_printer || printerName;
+          printerName = settings.receipt_printer || printerName;
         } else if (options.role === 'photo') {
-            printerName = settings.photo_printer || printerName;
+          printerName = settings.photo_printer || printerName;
         } else if (options.role === 'label' || options.role === 'barcode') {
-            printerName = settings.label_printer || settings.barcode_printer || printerName;
+          printerName = settings.label_printer || settings.barcode_printer || printerName;
         }
-    }
+      }
 
-    if (options && options.printerName) {
+      if (options && options.printerName) {
         printerName = options.printerName;
-    }
+      }
 
-    const useSystemDialog = settings ? (settings.use_system_dialog === 1) : false;
-    const silent = settings ? (settings.silent_print_enabled === 1) : !useSystemDialog;
-    
-    if (!printerName && !useSystemDialog) {
+      const useSystemDialog = settings ? (settings.use_system_dialog === 1) : false;
+      const silent = settings ? (settings.silent_print_enabled === 1) : !useSystemDialog;
+      
+      if (!printerName && !useSystemDialog) {
         return { success: false, error: "No default printer set. Please go to Settings to choose one." };
-    }
-    
-    try {
+      }
+      
+      try {
         const printOptions = {
-            ...options,
-            useSystemDialog: useSystemDialog,
-            silent: silent
+          ...options,
+          useSystemDialog: useSystemDialog,
+          silent: silent
         };
         const { printFile } = require('./printer');
         return await printFile(payload, printerName, printOptions);
-    } catch (e) {
+      } catch (e) {
         return { success: false, error: e.message || String(e) };
-    }
-  });
-
-  ipcMain.handle('print-test-page', async (event, printerName) => {
-      try {
-          const { printTestPage } = require('./printer');
-          return await printTestPage(printerName);
-      } catch (e) {
-          return { success: false, error: e.message || String(e) };
       }
-  });
+    });
 
-  ipcMain.handle('get-print-jobs', async () => {
+    registerGuardedHandler('print-test-page', ROLES.OPERATOR, async (event, printerName) => {
       try {
-          const db = require('./database/db');
-          return db.prepare('SELECT * FROM print_jobs ORDER BY created_at DESC LIMIT 100').all();
+        const { printTestPage } = require('./printer');
+        return await printTestPage(printerName);
+      } catch (e) {
+        return { success: false, error: e.message || String(e) };
+      }
+    });
+
+    registerGuardedHandler('get-print-jobs', ROLES.OPERATOR, async () => {
+      try {
+        const db = require('./database/db');
+        return db.prepare('SELECT * FROM print_jobs ORDER BY created_at DESC LIMIT 100').all();
       } catch(e) {
-          return [];
+        return [];
       }
-  });
+    });
 
-  ipcMain.handle('log-error', (event, msg) => {
-      const fs = require('fs');
-      const path = require('path');
+    registerGuardedHandler('log-error', ROLES.PUBLIC, (event, msg) => {
       try {
-          const logPath = path.join(app.getPath('userData'), 'renderer_error.log');
-          fs.appendFileSync(logPath, new Date().toISOString() + ': ' + msg + '\n');
+        const logPath = path.join(app.getPath('userData'), 'renderer_error.log');
+        fs.appendFileSync(logPath, new Date().toISOString() + ': ' + msg + '\n');
       } catch (e) {
-          console.error("Failed to write to renderer_error.log:", e);
+        console.error("Failed to write to renderer_error.log:", e);
       }
-  });
+    });
 
-  ipcMain.handle('generate-unified-pdf', async (event, payload, options) => {
+    registerGuardedHandler('generate-unified-pdf', ROLES.OPERATOR, async (event, payload, options) => {
       try {
-          const pdfBytes = await createUnifiedPdf(payload, options);
-          return { success: true, pdfBytes: pdfBytes }; // Returns a Uint8Array
+        const pdfBytes = await createUnifiedPdf(payload, options);
+        return { success: true, pdfBytes: pdfBytes };
       } catch (e) {
-          return { success: false, error: e.message };
+        return { success: false, error: e.message };
       }
-  });
+    });
 
-  ipcMain.handle('save-order-files', async (event, customerName, customerPhone, orderId, pdfBytes, originalFilePaths) => {
-      const fs = require('fs');
-      const path = require('path');
-      const os = require('os');
+    registerGuardedHandler('save-order-files', ROLES.OPERATOR, async (event, customerName, customerPhone, orderId, pdfBytes, originalFilePaths) => {
       try {
-          // Clean up name
-          const cleanName = customerName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-          const folderName = cleanName;
-          
-          const dateStr = new Date().toISOString().split('T')[0];
-          const orderFolderName = `Order_${dateStr}_${String(orderId).padStart(3, '0')}`;
-          
-          const baseDocsDir = app ? path.join(app.getPath('documents'), 'PrintShopManager') : path.join(os.homedir(), 'Documents', 'PrintShopManager');
-          const docsPath = path.join(baseDocsDir, 'Customers', folderName, orderFolderName);
-          fs.mkdirSync(docsPath, { recursive: true });
-          
-          const filePath = path.join(docsPath, `Unified_Order_${orderId}.pdf`);
-          fs.writeFileSync(filePath, Buffer.from(pdfBytes));
+        const cleanName = customerName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        const dateStr = new Date().toISOString().split('T')[0];
+        const orderFolderName = `Order_${dateStr}_${String(orderId).padStart(3, '0')}`;
+        
+        const baseDocsDir = app ? path.join(app.getPath('documents'), 'PrintShopManager') : path.join(os.homedir(), 'Documents', 'PrintShopManager');
+        const docsPath = path.join(baseDocsDir, 'Customers', cleanName, orderFolderName);
+        fs.mkdirSync(docsPath, { recursive: true });
+        
+        const filePath = path.join(docsPath, `Unified_Order_${orderId}.pdf`);
+        fs.writeFileSync(filePath, Buffer.from(pdfBytes));
 
-          // Save path to DB
-          const db = require('./database/db');
-          db.prepare('UPDATE orders SET unified_pdf_path = ? WHERE id = ?').run(filePath, orderId);
-          
-          // Copy original files
-          if (originalFilePaths && Array.isArray(originalFilePaths)) {
-              originalFilePaths.forEach((origPath, index) => {
-                  try {
-                      if (fs.existsSync(origPath)) {
-                          const ext = path.extname(origPath);
-                          const destPath = path.join(docsPath, `Original_${index + 1}${ext}`);
-                          fs.copyFileSync(origPath, destPath);
-                      }
-                  } catch (err) {
-                      console.error(`Failed to copy original file ${origPath}:`, err);
-                  }
-              });
-          }
-          
-          return { success: true, path: filePath };
+        const db = require('./database/db');
+        db.prepare('UPDATE orders SET unified_pdf_path = ? WHERE id = ?').run(filePath, orderId);
+        
+        if (originalFilePaths && Array.isArray(originalFilePaths)) {
+          originalFilePaths.forEach((origPath, index) => {
+            try {
+              if (fs.existsSync(origPath)) {
+                const ext = path.extname(origPath);
+                const destPath = path.join(docsPath, `Original_${index + 1}${ext}`);
+                fs.copyFileSync(origPath, destPath);
+              }
+            } catch (err) {
+              console.error(`Failed to copy original file ${origPath}:`, err);
+            }
+          });
+        }
+        
+        return { success: true, path: filePath };
       } catch (e) {
-          return { success: false, error: e.message };
+        return { success: false, error: e.message };
       }
-  });
+    });
 
-  // GST Tracker IPC Handlers
-  ipcMain.handle('create-gst-invoice', (event, data) => {
-    return GstModel.createInvoice(data.invoice, data.items);
-  });
+    // ==========================================
+    // GST TRACKER (OPERATOR+)
+    // ==========================================
+    registerGuardedHandler('create-gst-invoice', ROLES.OPERATOR, (event, data) => {
+      return GstModel.createInvoice(data.invoice, data.items);
+    });
 
-  ipcMain.handle('get-gst-invoices', (event, limit, offset) => {
-    return GstModel.getInvoices(limit, offset);
-  });
+    registerGuardedHandler('get-gst-invoices', ROLES.OPERATOR, (event, limit, offset) => {
+      return GstModel.getInvoices(limit, offset);
+    });
 
-  ipcMain.handle('get-gst-invoice-items', (event, invoiceId) => {
-    return GstModel.getInvoiceItems(invoiceId);
-  });
+    registerGuardedHandler('get-gst-invoice-items', ROLES.OPERATOR, (event, invoiceId) => {
+      return GstModel.getInvoiceItems(invoiceId);
+    });
 
-  ipcMain.handle('get-gst-summary', () => {
-    return GstModel.getGstSummary();
-  });
+    registerGuardedHandler('get-gst-summary', ROLES.OPERATOR, () => {
+      return GstModel.getGstSummary();
+    });
 
-  ipcMain.handle('update-customer-gst', (event, data) => {
-    return GstModel.updateCustomerGst(data.customerId, data.gstin, data.state);
-  });
+    registerGuardedHandler('update-customer-gst', ROLES.OPERATOR, (event, data) => {
+      return GstModel.updateCustomerGst(data.customerId, data.gstin, data.state);
+    });
 
-  // ==========================================
-  // INVENTORY IPC HANDLERS
-  // ==========================================
-  const InventoryModel = require('./database/inventory-model');
-  
-  ipcMain.handle('get-inv-categories', () => InventoryModel.getCategories());
-  ipcMain.handle('create-inv-category', (event, data) => InventoryModel.createCategory(data));
-  ipcMain.handle('update-inv-category', (event, { id, data }) => InventoryModel.updateCategory(id, data));
-  ipcMain.handle('delete-inv-category', (event, id) => InventoryModel.deleteCategory(id));
-  
-  ipcMain.handle('get-inv-suppliers', () => InventoryModel.getSuppliers());
-  ipcMain.handle('create-inv-supplier', (event, data) => InventoryModel.createSupplier(data));
-  ipcMain.handle('update-inv-supplier', (event, { id, data }) => InventoryModel.updateSupplier(id, data));
-  ipcMain.handle('delete-inv-supplier', (event, id) => InventoryModel.deleteSupplier(id));
-  
-  ipcMain.handle('get-inv-locations', () => InventoryModel.getLocations());
-  ipcMain.handle('create-inv-location', (event, data) => InventoryModel.createLocation(data));
-  ipcMain.handle('update-inv-location', (event, { id, data }) => InventoryModel.updateLocation(id, data));
-  ipcMain.handle('delete-inv-location', (event, id) => InventoryModel.deleteLocation(id));
-  
-  ipcMain.handle('get-inv-items', () => InventoryModel.getItems());
-  ipcMain.handle('get-inv-item-by-id', (event, id) => InventoryModel.getItemById(id));
-  ipcMain.handle('create-inv-item', (event, data) => InventoryModel.createItem(data));
-  ipcMain.handle('update-inv-item', (event, { id, data }) => InventoryModel.updateItem(id, data));
-  ipcMain.handle('delete-inv-item', (event, id) => InventoryModel.deleteItem(id));
-  
-  ipcMain.handle('adjust-inv-stock', (event, data) => InventoryModel.adjustStock(data));
-  ipcMain.handle('get-inv-transactions', (event, itemId) => InventoryModel.getStockTransactions(itemId));
-  
-  ipcMain.handle('get-inv-purchase-orders', () => InventoryModel.getPurchaseOrders());
-  ipcMain.handle('get-inv-purchase-order-by-id', (event, id) => InventoryModel.getPurchaseOrderById(id));
-  ipcMain.handle('create-inv-purchase-order', (event, data) => InventoryModel.createPurchaseOrder(data));
-  ipcMain.handle('receive-inv-purchase-order', (event, { poId, data }) => InventoryModel.receivePurchaseOrder(poId, data));
-  ipcMain.handle('cancel-inv-purchase-order', (event, { poId, data }) => InventoryModel.cancelPurchaseOrder(poId, data));
-  
-  ipcMain.handle('get-inv-alerts', () => InventoryModel.getAlerts());
-  ipcMain.handle('get-inv-settings', () => InventoryModel.getSettings());
-  ipcMain.handle('update-inv-settings', (event, data) => InventoryModel.updateSettings(data));
-  
-  ipcMain.handle('get-inv-dashboard-stats', () => InventoryModel.getDashboardStats());
-  ipcMain.handle('get-inv-reports', (event, { start, end }) => InventoryModel.getInventoryReports(start, end));
+    // ==========================================
+    // INVENTORY IPC HANDLERS
+    // ==========================================
+    const InventoryModel = require('./database/inventory-model');
+    
+    registerGuardedHandler('get-inv-categories', ROLES.OPERATOR, () => InventoryModel.getCategories());
+    registerGuardedHandler('create-inv-category', ROLES.ADMIN, (event, data) => InventoryModel.createCategory(data));
+    registerGuardedHandler('update-inv-category', ROLES.ADMIN, (event, { id, data }) => InventoryModel.updateCategory(id, data));
+    registerGuardedHandler('delete-inv-category', ROLES.ADMIN, (event, id) => InventoryModel.deleteCategory(id));
+    
+    registerGuardedHandler('get-inv-suppliers', ROLES.OPERATOR, () => InventoryModel.getSuppliers());
+    registerGuardedHandler('create-inv-supplier', ROLES.ADMIN, (event, data) => InventoryModel.createSupplier(data));
+    registerGuardedHandler('update-inv-supplier', ROLES.ADMIN, (event, { id, data }) => InventoryModel.updateSupplier(id, data));
+    registerGuardedHandler('delete-inv-supplier', ROLES.ADMIN, (event, id) => InventoryModel.deleteSupplier(id));
+    
+    registerGuardedHandler('get-inv-locations', ROLES.OPERATOR, () => InventoryModel.getLocations());
+    registerGuardedHandler('create-inv-location', ROLES.ADMIN, (event, data) => InventoryModel.createLocation(data));
+    registerGuardedHandler('update-inv-location', ROLES.ADMIN, (event, { id, data }) => InventoryModel.updateLocation(id, data));
+    registerGuardedHandler('delete-inv-location', ROLES.ADMIN, (event, id) => InventoryModel.deleteLocation(id));
+    
+    registerGuardedHandler('get-inv-items', ROLES.OPERATOR, () => InventoryModel.getItems());
+    registerGuardedHandler('get-inv-item-by-id', ROLES.OPERATOR, (event, id) => InventoryModel.getItemById(id));
+    registerGuardedHandler('create-inv-item', ROLES.ADMIN, (event, data) => InventoryModel.createItem(data));
+    registerGuardedHandler('update-inv-item', ROLES.ADMIN, (event, { id, data }) => InventoryModel.updateItem(id, data));
+    registerGuardedHandler('delete-inv-item', ROLES.ADMIN, (event, id) => InventoryModel.deleteItem(id));
+    
+    registerGuardedHandler('adjust-inv-stock', ROLES.ADMIN, (event, data) => InventoryModel.adjustStock(data));
+    registerGuardedHandler('get-inv-transactions', ROLES.OPERATOR, (event, itemId) => InventoryModel.getStockTransactions(itemId));
+    
+    registerGuardedHandler('get-inv-purchase-orders', ROLES.OPERATOR, () => InventoryModel.getPurchaseOrders());
+    registerGuardedHandler('get-inv-purchase-order-by-id', ROLES.OPERATOR, (event, id) => InventoryModel.getPurchaseOrderById(id));
+    registerGuardedHandler('create-inv-purchase-order', ROLES.ADMIN, (event, data) => InventoryModel.createPurchaseOrder(data));
+    registerGuardedHandler('receive-inv-purchase-order', ROLES.ADMIN, (event, { poId, data }) => InventoryModel.receivePurchaseOrder(poId, data));
+    registerGuardedHandler('cancel-inv-purchase-order', ROLES.ADMIN, (event, { poId, data }) => InventoryModel.cancelPurchaseOrder(poId, data));
+    
+    registerGuardedHandler('get-inv-alerts', ROLES.OPERATOR, () => InventoryModel.getAlerts());
+    registerGuardedHandler('get-inv-settings', ROLES.OPERATOR, () => InventoryModel.getSettings());
+    registerGuardedHandler('update-inv-settings', ROLES.ADMIN, (event, data) => InventoryModel.updateSettings(data));
+    
+    registerGuardedHandler('get-inv-dashboard-stats', ROLES.OPERATOR, () => InventoryModel.getDashboardStats());
+    registerGuardedHandler('get-inv-reports', ROLES.OPERATOR, (event, { start, end }) => InventoryModel.getInventoryReports(start, end));
 
-  // ==========================================
-  // ENTERPRISE MODULES IPC HANDLERS
-  // ==========================================
-  const RecipeService = require('./database/services/recipe-service');
-  const TransferService = require('./database/services/transfer-service');
-  const CountService = require('./database/services/count-service');
-  const ForecastService = require('./database/services/forecast-service');
-  const POService = require('./database/services/po-service');
-  const NotificationService = require('./database/services/notification-service');
-  const db = require('./database/db');
+    // ==========================================
+    // ENTERPRISE RECIPES & FORECASTING
+    // ==========================================
+    const RecipeService = require('./database/services/recipe-service');
+    const TransferService = require('./database/services/transfer-service');
+    const CountService = require('./database/services/count-service');
+    const ForecastService = require('./database/services/forecast-service');
+    const POService = require('./database/services/po-service');
+    const NotificationService = require('./database/services/notification-service');
+    const db = require('./database/db');
 
-  ipcMain.handle('get-inv-recipes', () => RecipeService.getRecipes());
-  ipcMain.handle('get-inv-recipe-by-id', (event, id) => RecipeService.getRecipeById(id));
-  ipcMain.handle('save-inv-recipe', (event, data) => RecipeService.saveRecipe(data, data.operator, data.role));
-  ipcMain.handle('delete-inv-recipe', (event, id) => RecipeService.softDeleteRecipe(id));
+    registerGuardedHandler('get-inv-recipes', ROLES.OPERATOR, () => RecipeService.getRecipes());
+    registerGuardedHandler('get-inv-recipe-by-id', ROLES.OPERATOR, (event, id) => RecipeService.getRecipeById(id));
+    registerGuardedHandler('save-inv-recipe', ROLES.ADMIN, (event, data) => RecipeService.saveRecipe(data, data.operator, data.role));
+    registerGuardedHandler('delete-inv-recipe', ROLES.ADMIN, (event, id) => RecipeService.softDeleteRecipe(id));
 
-  ipcMain.handle('transfer-inv-stock', (event, data) => TransferService.transferStock(data, data.operator, data.role));
-  ipcMain.handle('get-inv-transfers', () => TransferService.getTransfers());
+    registerGuardedHandler('transfer-inv-stock', ROLES.OPERATOR, (event, data) => TransferService.transferStock(data, data.operator, data.role));
+    registerGuardedHandler('get-inv-transfers', ROLES.OPERATOR, () => TransferService.getTransfers());
 
-  ipcMain.handle('create-inv-stock-count', (event, data) => CountService.createCount(data, data.operator, data.role));
-  ipcMain.handle('approve-inv-stock-count', (event, id) => CountService.approveCount(id));
-  ipcMain.handle('get-inv-stock-counts', () => CountService.getStockCounts());
+    registerGuardedHandler('create-inv-stock-count', ROLES.ADMIN, (event, data) => CountService.createCount(data, data.operator, data.role));
+    registerGuardedHandler('approve-inv-stock-count', ROLES.ADMIN, (event, id) => CountService.approveCount(id));
+    registerGuardedHandler('get-inv-stock-counts', ROLES.OPERATOR, () => CountService.getStockCounts());
 
-  ipcMain.handle('get-inv-forecasting', (event, method) => ForecastService.getAllForecasts(method));
-  ipcMain.handle('create-inv-return', (event, data) => POService.createPurchaseReturn(data, data.operator, data.role));
+    registerGuardedHandler('get-inv-forecasting', ROLES.OPERATOR, (event, method) => ForecastService.getAllForecasts(method));
+    registerGuardedHandler('create-inv-return', ROLES.ADMIN, (event, data) => POService.createPurchaseReturn(data, data.operator, data.role));
 
-  ipcMain.handle('get-inv-notifications', (event, unreadOnly) => NotificationService.getNotifications(unreadOnly));
-  ipcMain.handle('mark-inv-notification-read', (event, id) => NotificationService.markAsRead(id));
-  ipcMain.handle('dismiss-all-inv-notifications', () => NotificationService.dismissAll());
+    registerGuardedHandler('get-inv-notifications', ROLES.OPERATOR, (event, unreadOnly) => NotificationService.getNotifications(unreadOnly));
+    registerGuardedHandler('mark-inv-notification-read', ROLES.OPERATOR, (event, id) => NotificationService.markAsRead(id));
+    registerGuardedHandler('dismiss-all-inv-notifications', ROLES.OPERATOR, () => NotificationService.dismissAll());
 
-  ipcMain.handle('get-printer-material-metrics', () => {
-    return db.prepare('SELECT * FROM printer_material_metrics ORDER BY last_updated DESC').all();
-  });
+    registerGuardedHandler('get-printer-material-metrics', ROLES.OPERATOR, () => {
+      return db.prepare('SELECT * FROM printer_material_metrics ORDER BY last_updated DESC').all();
+    });
 
-  // ==========================================
-  // DOCUMENT STUDIO IPC HANDLERS — Phase 2A
-  // ==========================================
-  const DocEngine = require('./document-engine');
+    // ==========================================
+    // DOCUMENT STUDIO IPC HANDLERS
+    // ==========================================
+    const DocEngine = require('./document-engine');
 
-  // PDF Tools
-  ipcMain.handle('doc-rotate-pages',     (e, filePath, indices, deg)        => DocEngine.rotatePdfPages(filePath, indices, deg));
-  ipcMain.handle('doc-delete-pages',     (e, filePath, indices)             => DocEngine.deletePages(filePath, indices));
-  ipcMain.handle('doc-reorder-pages',    (e, filePath, order)               => DocEngine.reorderPages(filePath, order));
-  ipcMain.handle('doc-duplicate-pages',  (e, filePath, indices)             => DocEngine.duplicatePages(filePath, indices));
-  ipcMain.handle('doc-extract-pages',    (e, filePath, indices)             => DocEngine.extractPages(filePath, indices));
-  ipcMain.handle('doc-split-pdf',        (e, filePath, points)              => DocEngine.splitPdf(filePath, points));
-  ipcMain.handle('doc-merge-pdfs',       (e, paths)                         => DocEngine.mergePdfs(paths));
-  ipcMain.handle('doc-insert-blank',     (e, filePath, positions, paper)    => DocEngine.insertBlankPages(filePath, positions, paper));
-  ipcMain.handle('doc-add-page-numbers', (e, filePath, opts)                => DocEngine.addPageNumbers(filePath, opts));
-  ipcMain.handle('doc-add-watermark',    (e, filePath, text, opts)          => DocEngine.addWatermark(filePath, text, opts));
-  ipcMain.handle('doc-add-stamp',        (e, filePath, text, indices, opts) => DocEngine.addStamp(filePath, text, indices, opts));
-  ipcMain.handle('doc-scale-pages',      (e, filePath, sx, sy)              => DocEngine.scalePages(filePath, sx, sy));
-  ipcMain.handle('doc-fit-to-area',      (e, filePath, w, h, mode)          => DocEngine.fitToArea(filePath, w, h, mode));
-  ipcMain.handle('doc-crop-pages',       (e, filePath, box, indices)        => DocEngine.cropPages(filePath, box, indices));
-  ipcMain.handle('doc-auto-rotate',      (e, filePath)                      => DocEngine.autoRotateDetect(filePath));
+    registerGuardedHandler('doc-rotate-pages', ROLES.OPERATOR, (e, filePath, indices, deg) => DocEngine.rotatePdfPages(filePath, indices, deg));
+    registerGuardedHandler('doc-delete-pages', ROLES.OPERATOR, (e, filePath, indices) => DocEngine.deletePages(filePath, indices));
+    registerGuardedHandler('doc-reorder-pages', ROLES.OPERATOR, (e, filePath, order) => DocEngine.reorderPages(filePath, order));
+    registerGuardedHandler('doc-duplicate-pages', ROLES.OPERATOR, (e, filePath, indices) => DocEngine.duplicatePages(filePath, indices));
+    registerGuardedHandler('doc-extract-pages', ROLES.OPERATOR, (e, filePath, indices) => DocEngine.extractPages(filePath, indices));
+    registerGuardedHandler('doc-split-pdf', ROLES.OPERATOR, (e, filePath, points) => DocEngine.splitPdf(filePath, points));
+    registerGuardedHandler('doc-merge-pdfs', ROLES.OPERATOR, (e, paths) => DocEngine.mergePdfs(paths));
+    registerGuardedHandler('doc-insert-blank', ROLES.OPERATOR, (e, filePath, positions, paper) => DocEngine.insertBlankPages(filePath, positions, paper));
+    registerGuardedHandler('doc-add-page-numbers', ROLES.OPERATOR, (e, filePath, opts) => DocEngine.addPageNumbers(filePath, opts));
+    registerGuardedHandler('doc-add-watermark', ROLES.OPERATOR, (e, filePath, text, opts) => DocEngine.addWatermark(filePath, text, opts));
+    registerGuardedHandler('doc-add-stamp', ROLES.OPERATOR, (e, filePath, text, indices, opts) => DocEngine.addStamp(filePath, text, indices, opts));
+    registerGuardedHandler('doc-scale-pages', ROLES.OPERATOR, (e, filePath, sx, sy) => DocEngine.scalePages(filePath, sx, sy));
+    registerGuardedHandler('doc-fit-to-area', ROLES.OPERATOR, (e, filePath, w, h, mode) => DocEngine.fitToArea(filePath, w, h, mode));
+    registerGuardedHandler('doc-crop-pages', ROLES.OPERATOR, (e, filePath, box, indices) => DocEngine.cropPages(filePath, box, indices));
+    registerGuardedHandler('doc-auto-rotate', ROLES.OPERATOR, (e, filePath) => DocEngine.autoRotateDetect(filePath));
 
-  // Output & Integration
-  ipcMain.handle('doc-save-output',      (e, pdfBytes, name, dir)           => DocEngine.saveOutput(pdfBytes, name, dir));
-  ipcMain.handle('doc-save-to-order',    (e, pdfBytes, name)                => DocEngine.saveToOrderIncoming(pdfBytes, name));
+    registerGuardedHandler('doc-save-output', ROLES.OPERATOR, (e, pdfBytes, name, dir) => DocEngine.saveOutput(pdfBytes, name, dir));
+    registerGuardedHandler('doc-save-to-order', ROLES.OPERATOR, (e, pdfBytes, name) => DocEngine.saveToOrderIncoming(pdfBytes, name));
 
-  // System Janitor & Maintenance
-  ipcMain.handle('system-cleanup-temp',  ()                                 => require('./janitor').cleanupTempFiles());
-  ipcMain.handle('system-optimize-db',   ()                                 => require('./janitor').optimizeDatabase());
+    registerGuardedHandler('system-cleanup-temp', ROLES.ADMIN, () => require('./janitor').cleanupTempFiles());
+    registerGuardedHandler('system-optimize-db', ROLES.ADMIN, () => require('./janitor').optimizeDatabase());
 
-  // Project Management
-  ipcMain.handle('doc-get-projects',     ()                                 => { try { return { success: true, data: DocEngine.getProjects() }; } catch(e) { return { success: false, error: e.message }; } });
-  ipcMain.handle('doc-create-project',   (e, data)                          => { try { return { success: true, data: DocEngine.createProject(data) }; } catch(e) { return { success: false, error: e.message }; } });
-  ipcMain.handle('doc-save-project',     (e, projectId, stateJson)          => { try { return DocEngine.saveProject(projectId, stateJson); } catch(e) { return { success: false, error: e.message }; } });
-  ipcMain.handle('doc-delete-project',   (e, projectId)                     => { try { return DocEngine.deleteProject(projectId); } catch(e) { return { success: false, error: e.message }; } });
+    registerGuardedHandler('doc-get-projects', ROLES.OPERATOR, () => { try { return { success: true, data: DocEngine.getProjects() }; } catch(e) { return { success: false, error: e.message }; } });
+    registerGuardedHandler('doc-create-project', ROLES.OPERATOR, (e, data) => { try { return { success: true, data: DocEngine.createProject(data) }; } catch(e) { return { success: false, error: e.message }; } });
+    registerGuardedHandler('doc-save-project', ROLES.OPERATOR, (e, projectId, stateJson) => { try { return DocEngine.saveProject(projectId, stateJson); } catch(e) { return { success: false, error: e.message }; } });
+    registerGuardedHandler('doc-delete-project', ROLES.OPERATOR, (e, projectId) => { try { return DocEngine.deleteProject(projectId); } catch(e) { return { success: false, error: e.message }; } });
 
-  // Presets
-  ipcMain.handle('doc-get-presets',      (e, type)                          => { try { return { success: true, data: DocEngine.getPresets(type) }; } catch(e) { return { success: false, error: e.message }; } });
-  ipcMain.handle('doc-save-preset',      (e, data)                          => { try { return { success: true, data: DocEngine.savePreset(data) }; } catch(e) { return { success: false, error: e.message }; } });
-  ipcMain.handle('doc-delete-preset',    (e, id)                            => { try { return DocEngine.deletePreset(id); } catch(e) { return { success: false, error: e.message }; } });
+    registerGuardedHandler('doc-get-presets', ROLES.OPERATOR, (e, type) => { try { return { success: true, data: DocEngine.getPresets(type) }; } catch(e) { return { success: false, error: e.message }; } });
+    registerGuardedHandler('doc-save-preset', ROLES.OPERATOR, (e, data) => { try { return { success: true, data: DocEngine.savePreset(data) }; } catch(e) { return { success: false, error: e.message }; } });
+    registerGuardedHandler('doc-delete-preset', ROLES.OPERATOR, (e, id) => { try { return DocEngine.deletePreset(id); } catch(e) { return { success: false, error: e.message }; } });
 
-  // Session / Crash Recovery
-  ipcMain.handle('doc-save-session',     (e, projectId, stateJson)          => { try { return DocEngine.saveSessionState(projectId, stateJson); } catch(e) { return { success: false, error: e.message }; } });
-  ipcMain.handle('doc-get-session',      (e, projectId)                     => { try { return { success: true, data: DocEngine.getSessionState(projectId) }; } catch(e) { return { success: false, error: e.message }; } });
-  ipcMain.handle('doc-clear-session',    (e, projectId)                     => { try { return DocEngine.clearSessionState(projectId); } catch(e) { return { success: false, error: e.message }; } });
+    registerGuardedHandler('doc-save-session', ROLES.OPERATOR, (e, projectId, stateJson) => { try { return DocEngine.saveSessionState(projectId, stateJson); } catch(e) { return { success: false, error: e.message }; } });
+    registerGuardedHandler('doc-get-session', ROLES.OPERATOR, (e, projectId) => { try { return { success: true, data: DocEngine.getSessionState(projectId) }; } catch(e) { return { success: false, error: e.message }; } });
+    registerGuardedHandler('doc-clear-session', ROLES.OPERATOR, (e, projectId) => { try { return DocEngine.clearSessionState(projectId); } catch(e) { return { success: false, error: e.message }; } });
 
-  // Plugin extensibility
-  ipcMain.handle('doc-process-plugin',   (e, filePath, pluginId, params)    => DocEngine.processWithPlugin(filePath, pluginId, params));
-  ipcMain.handle('doc-batch-process',    (e, filePaths, operation, params)  => DocEngine.batchProcess(filePaths, operation, params));
+    registerGuardedHandler('doc-process-plugin', ROLES.OPERATOR, (e, filePath, pluginId, params) => DocEngine.processWithPlugin(filePath, pluginId, params));
+    registerGuardedHandler('doc-batch-process', ROLES.OPERATOR, (e, filePaths, operation, params) => DocEngine.batchProcess(filePaths, operation, params));
 
-  ipcMain.handle('doc-convert-office', async (e, filePath) => {
+    registerGuardedHandler('doc-convert-office', ROLES.OPERATOR, async (e, filePath) => {
       const { convertOfficeToPdf } = require('./doc-converter');
       try {
-          const outputDir = path.join(app.getPath('userData'), 'DocumentStudio', 'Converted');
-          const pdfPath = await convertOfficeToPdf(filePath, outputDir);
-          return { success: true, pdfPath };
+        const outputDir = path.join(app.getPath('userData'), 'DocumentStudio', 'Converted');
+        const pdfPath = await convertOfficeToPdf(filePath, outputDir);
+        return { success: true, pdfPath };
       } catch (err) {
-          return { success: false, error: err.message };
+        return { success: false, error: err.message };
       }
-  });
+    });
 
-  ipcMain.handle('doc-compile-print-pdf', async (e, recipe) => {
+    registerGuardedHandler('doc-compile-print-pdf', ROLES.OPERATOR, async (e, recipe) => {
       try {
-          const res = await DocEngine.compilePrintReadyPdf(recipe);
-          if (!res.success) throw new Error(res.error);
-          
-          const outputDir = path.join(app.getPath('userData'), 'DocumentStudio', 'Compiled');
-          const timestamp = Date.now();
-          const targetPath = path.join(outputDir, `Compiled_${timestamp}.pdf`);
-          
-          fs.mkdirSync(outputDir, { recursive: true });
-          fs.writeFileSync(targetPath, res.data);
-          
-          return { success: true, filePath: targetPath };
+        const res = await DocEngine.compilePrintReadyPdf(recipe);
+        if (!res.success) throw new Error(res.error);
+        
+        const outputDir = path.join(app.getPath('userData'), 'DocumentStudio', 'Compiled');
+        const timestamp = Date.now();
+        const targetPath = path.join(outputDir, `Compiled_${timestamp}.pdf`);
+        
+        fs.mkdirSync(outputDir, { recursive: true });
+        fs.writeFileSync(targetPath, res.data);
+        return { success: true, filePath: targetPath };
       } catch (err) {
-          return { success: false, error: err.message };
+        return { success: false, error: err.message };
       }
-  });
+    });
 
-  // Enterprise Products, Print Profiles, and Device Manager IPC Handlers
-  ipcMain.handle('products:getAll', () => ProductModel.getAll());
-  ipcMain.handle('products:save', (e, data) => data.id ? ProductModel.update(data.id, data) : ProductModel.create(data));
-  ipcMain.handle('products:delete', (e, id) => ProductModel.delete(id));
+    // ==========================================
+    // ENTERPRISE PRODUCTS, PROFILES & DEVICES
+    // ==========================================
+    registerGuardedHandler('products:getAll', ROLES.OPERATOR, () => ProductModel.getAll());
+    registerGuardedHandler('products:save', ROLES.ADMIN, (e, data) => data.id ? ProductModel.update(data.id, data) : ProductModel.create(data));
+    registerGuardedHandler('products:delete', ROLES.ADMIN, (e, id) => ProductModel.delete(id));
 
-  ipcMain.handle('profiles:getAll', () => PrintProfileModel.getAll());
-  ipcMain.handle('profiles:save', (e, data) => data.id ? PrintProfileModel.update(data.id, data) : PrintProfileModel.create(data));
-  ipcMain.handle('profiles:duplicate', (e, id) => PrintProfileModel.duplicate(id));
-  ipcMain.handle('profiles:delete', (e, id) => PrintProfileModel.delete(id));
+    registerGuardedHandler('profiles:getAll', ROLES.OPERATOR, () => PrintProfileModel.getAll());
+    registerGuardedHandler('profiles:save', ROLES.ADMIN, (e, data) => data.id ? PrintProfileModel.update(data.id, data) : PrintProfileModel.create(data));
+    registerGuardedHandler('profiles:duplicate', ROLES.ADMIN, (e, id) => PrintProfileModel.duplicate(id));
+    registerGuardedHandler('profiles:delete', ROLES.ADMIN, (e, id) => PrintProfileModel.delete(id));
 
-  ipcMain.handle('devices:getPrinters', () => DeviceManager.getPrinters());
-  ipcMain.handle('devices:discoverPrinters', () => DeviceManager.discoverPrinters());
-  ipcMain.handle('devices:getGroups', () => DeviceManager.getGroups());
-  ipcMain.handle('devices:saveGroup', (e, data) => DeviceManager.saveGroup(data));
-  ipcMain.handle('devices:deleteGroup', (e, id) => DeviceManager.deleteGroup(id));
-  ipcMain.handle('devices:getCalibrations', () => DeviceManager.getCalibrations());
-  ipcMain.handle('devices:getCalibration', (e, name) => DeviceManager.getCalibration(name));
-  ipcMain.handle('devices:saveCalibration', (e, name, data) => DeviceManager.saveCalibration(name, data));
+    registerGuardedHandler('devices:getPrinters', ROLES.OPERATOR, () => DeviceManager.getPrinters());
+    registerGuardedHandler('devices:discoverPrinters', ROLES.OPERATOR, () => DeviceManager.discoverPrinters());
+    registerGuardedHandler('devices:getGroups', ROLES.OPERATOR, () => DeviceManager.getGroups());
+    registerGuardedHandler('devices:saveGroup', ROLES.ADMIN, (e, data) => DeviceManager.saveGroup(data));
+    registerGuardedHandler('devices:deleteGroup', ROLES.ADMIN, (e, id) => DeviceManager.deleteGroup(id));
+    registerGuardedHandler('devices:getCalibrations', ROLES.OPERATOR, () => DeviceManager.getCalibrations());
+    registerGuardedHandler('devices:getCalibration', ROLES.OPERATOR, (e, name) => DeviceManager.getCalibration(name));
+    registerGuardedHandler('devices:saveCalibration', ROLES.ADMIN, (e, name, data) => DeviceManager.saveCalibration(name, data));
 
-  ipcMain.handle('print:validateDocument', (e, filePath) => DocumentValidator.validate(filePath));
-  ipcMain.handle('print:getAuditLogs', (e, limit) => PrintAuditLogModel.getLogs(limit));
-  ipcMain.handle('print:getLogById', (e, id) => PrintAuditLogModel.getLogById(id));
-  
-  ipcMain.handle('print:reprintJob', async (e, auditLogId) => {
+    registerGuardedHandler('print:validateDocument', ROLES.OPERATOR, (e, filePath) => DocumentValidator.validate(filePath));
+    registerGuardedHandler('print:getAuditLogs', ROLES.OPERATOR, (e, limit) => PrintAuditLogModel.getLogs(limit));
+    registerGuardedHandler('print:getLogById', ROLES.OPERATOR, (e, id) => PrintAuditLogModel.getLogById(id));
+    
+    registerGuardedHandler('print:reprintJob', ROLES.OPERATOR, async (e, auditLogId) => {
       try {
-          const log = PrintAuditLogModel.getLogById(auditLogId);
-          if (!log) throw new Error("Print audit log not found");
-          
-          const snapshot = JSON.parse(log.print_profile_snapshot_json || '{}');
-          // For reprint, payload is the original compiled/unified file path
-          const payload = [{ path: log.file_path, ext: '.pdf', rotate: 0, fit: 'contain' }];
-          
-          const printOptions = {
-              ...snapshot,
-              copies: log.copies,
-              printProfileId: log.print_profile_id,
-              productId: log.product_id
-          };
-          
-          const { printFile } = require('./printer');
-          return await printFile(payload, log.printer_name, printOptions);
+        const log = PrintAuditLogModel.getLogById(auditLogId);
+        if (!log) throw new Error("Print audit log not found");
+        
+        const snapshot = JSON.parse(log.print_profile_snapshot_json || '{}');
+        const payload = [{ path: log.file_path, ext: '.pdf', rotate: 0, fit: 'contain' }];
+        
+        const printOptions = {
+          ...snapshot,
+          copies: log.copies,
+          printProfileId: log.print_profile_id,
+          productId: log.product_id
+        };
+        
+        const { printFile } = require('./printer');
+        return await printFile(payload, log.printer_name, printOptions);
       } catch (err) {
-          return { success: false, error: err.message };
+        return { success: false, error: err.message };
       }
-  });
+    });
 
-  ipcMain.handle('toggle-fullscreen', () => {
+    registerGuardedHandler('toggle-fullscreen', ROLES.PUBLIC, () => {
       const win = BrowserWindow.getFocusedWindow() || mainWindow;
       if (win) {
-          const isFS = win.isFullScreen();
-          win.setFullScreen(!isFS);
-          return !isFS;
+        const isFS = win.isFullScreen();
+        win.setFullScreen(!isFS);
+        return !isFS;
       }
       return false;
-  });
+    });
 
-  ipcMain.handle('set-fullscreen', (event, flag) => {
+    registerGuardedHandler('set-fullscreen', ROLES.PUBLIC, (event, flag) => {
       const win = BrowserWindow.getFocusedWindow() || mainWindow;
       if (win) {
-          win.setFullScreen(!!flag);
-          return win.isFullScreen();
+        win.setFullScreen(!!flag);
+        return win.isFullScreen();
       }
       return false;
-  });
+    });
 
-  ipcMain.handle('is-fullscreen', () => {
+    registerGuardedHandler('is-fullscreen', ROLES.PUBLIC, () => {
       const win = BrowserWindow.getFocusedWindow() || mainWindow;
       return win ? win.isFullScreen() : false;
-  });
+    });
   } // End of if (!global.ipcHandlersRegistered)
 
   // Open DevTools during development

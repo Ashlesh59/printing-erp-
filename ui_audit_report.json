@@ -1,0 +1,155 @@
+{
+  "timestamp": "2026-09-02T16:05:14.850Z",
+  "passed": [
+    {
+      "feature": "Splash Screen",
+      "detail": "Splash overlay present with loading progress."
+    },
+    {
+      "feature": "Role Screen",
+      "detail": "Role Selection deck verified with 3 modes (Customer, Shop, Admin)."
+    },
+    {
+      "feature": "Shop Mode Entry",
+      "detail": "Successfully entered Shop Mode and initialized Main App."
+    },
+    {
+      "feature": "Navigation Bar",
+      "detail": "All primary navigation buttons rendered (12 buttons)."
+    },
+    {
+      "feature": "View Activation [dashboard]",
+      "detail": "View activated cleanly."
+    },
+    {
+      "feature": "View Activation [workspace]",
+      "detail": "View activated cleanly."
+    },
+    {
+      "feature": "View Activation [incoming]",
+      "detail": "View activated cleanly."
+    },
+    {
+      "feature": "View Activation [history]",
+      "detail": "View activated cleanly."
+    },
+    {
+      "feature": "View Activation [customers]",
+      "detail": "View activated cleanly."
+    },
+    {
+      "feature": "View Activation [production]",
+      "detail": "View activated cleanly."
+    },
+    {
+      "feature": "View Activation [inventory]",
+      "detail": "View activated cleanly."
+    },
+    {
+      "feature": "View Activation [doc-studio]",
+      "detail": "View activated cleanly."
+    },
+    {
+      "feature": "View Activation [budget-tracker]",
+      "detail": "View activated cleanly."
+    },
+    {
+      "feature": "View Activation [settings]",
+      "detail": "View activated cleanly."
+    },
+    {
+      "feature": "Dashboard Quick Actions",
+      "detail": "Dashboard action shortcuts present."
+    },
+    {
+      "feature": "Order Completion Panel",
+      "detail": "Panel present with 3 actions: Save & Print, Print Only, Schedule."
+    },
+    {
+      "feature": "Pre-Action Order Validation",
+      "detail": "Zero-file empty order correctly rejected with validation notice."
+    },
+    {
+      "feature": "Post-Billing Action Dialog",
+      "detail": "Verified modal with all 3 commercial routing buttons."
+    },
+    {
+      "feature": "Smart Production Scheduler Modal",
+      "detail": "Schedule modal verified with load bar, printer selection, and checklists."
+    },
+    {
+      "feature": "Printer Diagnostic & Recovery Modal",
+      "detail": "Hardware recovery dialog verified with alternate printer switch."
+    },
+    {
+      "feature": "Inventory Add Item Modal",
+      "detail": "Item creation modal present."
+    },
+    {
+      "feature": "Inventory Stock Adjustment",
+      "detail": "Quick stock adjustment dialog present."
+    },
+    {
+      "feature": "Customer CRM",
+      "detail": "Customer data directory and search bar active."
+    },
+    {
+      "feature": "Order History & CRM Archive",
+      "detail": "Order archive table, date filters, and status filters verified."
+    },
+    {
+      "feature": "Document Studio Engine",
+      "detail": "Document workspace, tools, and canvas visualizer loaded."
+    },
+    {
+      "feature": "Budget Tracker Subsystem",
+      "detail": "Financial accounting & budget module container active."
+    },
+    {
+      "feature": "Incoming Orders Live Kiosk Hub",
+      "detail": "Mobile kiosk incoming orders interface active."
+    },
+    {
+      "feature": "Rapid Navigation Stress Test",
+      "detail": "Completed 20 fast UI tab switches without crashing or freezing."
+    }
+  ],
+  "uiBreaks": [
+    {
+      "component": "Dashboard KPIs",
+      "issue": "One or more KPI cards missing in #dashboard."
+    }
+  ],
+  "workflowBreaks": [],
+  "warnings": [
+    {
+      "area": "Inventory Sub-Tab",
+      "note": "Tab button not found for: items"
+    },
+    {
+      "area": "Inventory Sub-Tab",
+      "note": "Tab button not found for: categories"
+    },
+    {
+      "area": "Inventory Sub-Tab",
+      "note": "Tab button not found for: locations"
+    },
+    {
+      "area": "Inventory Sub-Tab",
+      "note": "Tab button not found for: suppliers"
+    },
+    {
+      "area": "Inventory Sub-Tab",
+      "note": "Tab button not found for: po"
+    },
+    {
+      "area": "Inventory Sub-Tab",
+      "note": "Tab button not found for: alerts"
+    },
+    {
+      "area": "Inventory Sub-Tab",
+      "note": "Tab button not found for: recipes"
+    }
+  ],
+  "consoleErrors": []
+}

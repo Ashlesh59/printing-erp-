@@ -20,8 +20,10 @@ window.SetupWizard = (function () {
         bindingPrice: 30.0,
         photoPrice: 50.0,
         scanPrice: 5.0,
-        adminPin: '1234',
-        managerPin: '5678',
+        adminPin: '',
+        confirmAdminPin: '',
+        managerPin: '',
+        confirmManagerPin: '',
         backupFreq: 'daily'
     };
 
@@ -180,11 +182,24 @@ window.SetupWizard = (function () {
             wizardData.photoPrice = parseFloat(document.getElementById('wz-price-photo').value) || 50.0;
             wizardData.scanPrice = parseFloat(document.getElementById('wz-price-scan').value) || 5.0;
         } else if (currentStep === 8) {
-            wizardData.adminPin = document.getElementById('wz-pin-admin').value || '1234';
-            wizardData.managerPin = document.getElementById('wz-pin-manager').value || '5678';
+            wizardData.adminPin = (document.getElementById('wz-pin-admin') ? document.getElementById('wz-pin-admin').value : '').trim();
+            wizardData.confirmAdminPin = (document.getElementById('wz-pin-admin-confirm') ? document.getElementById('wz-pin-admin-confirm').value : '').trim();
+            wizardData.managerPin = (document.getElementById('wz-pin-manager') ? document.getElementById('wz-pin-manager').value : '').trim();
+            wizardData.confirmManagerPin = (document.getElementById('wz-pin-manager-confirm') ? document.getElementById('wz-pin-manager-confirm').value : '').trim();
         } else if (currentStep === 9) {
             wizardData.backupFreq = document.getElementById('wz-backup-freq').value;
         }
+    }
+
+    function isWeakPin(pin) {
+        if (!pin || pin.length < 6 || pin.length > 12 || !/^\d+$/.test(pin)) return true;
+        if (/^(\d)\1+$/.test(pin)) return true;
+        let asc = true, desc = true;
+        for (let i = 1; i < pin.length; i++) {
+            if (parseInt(pin[i], 10) !== (parseInt(pin[i-1], 10) + 1) % 10) asc = false;
+            if (parseInt(pin[i], 10) !== (parseInt(pin[i-1], 10) - 1 + 10) % 10) desc = false;
+        }
+        return asc || desc;
     }
 
     function validateStep() {
@@ -195,9 +210,39 @@ window.SetupWizard = (function () {
                 return false;
             }
         } else if (currentStep === 8) {
-            const adminPin = document.getElementById('wz-pin-admin').value.trim();
-            if (!/^\d{4}$/.test(adminPin)) {
-                if (window.showToast) window.showToast('Administrator PIN must be exactly 4 digits', 'warning');
+            const adminPin = (document.getElementById('wz-pin-admin') ? document.getElementById('wz-pin-admin').value : '').trim();
+            const confirmAdmin = (document.getElementById('wz-pin-admin-confirm') ? document.getElementById('wz-pin-admin-confirm').value : '').trim();
+            const opPin = (document.getElementById('wz-pin-manager') ? document.getElementById('wz-pin-manager').value : '').trim();
+            const confirmOp = (document.getElementById('wz-pin-manager-confirm') ? document.getElementById('wz-pin-manager-confirm').value : '').trim();
+
+            if (!/^\d{6,12}$/.test(adminPin)) {
+                if (window.showToast) window.showToast('Administrator PIN must be between 6 and 12 digits', 'warning');
+                return false;
+            }
+            if (isWeakPin(adminPin)) {
+                if (window.showToast) window.showToast('Administrator PIN cannot be sequential (123456) or repeating (111111)', 'warning');
+                return false;
+            }
+            if (adminPin !== confirmAdmin) {
+                if (window.showToast) window.showToast('Administrator PIN confirmation does not match', 'warning');
+                return false;
+            }
+
+            if (!/^\d{6,12}$/.test(opPin)) {
+                if (window.showToast) window.showToast('Shop Operator PIN must be between 6 and 12 digits', 'warning');
+                return false;
+            }
+            if (isWeakPin(opPin)) {
+                if (window.showToast) window.showToast('Shop Operator PIN cannot be sequential (123456) or repeating (111111)', 'warning');
+                return false;
+            }
+            if (opPin !== confirmOp) {
+                if (window.showToast) window.showToast('Shop Operator PIN confirmation does not match', 'warning');
+                return false;
+            }
+
+            if (adminPin === opPin) {
+                if (window.showToast) window.showToast('Administrator PIN and Shop Operator PIN must be different', 'warning');
                 return false;
             }
         }
