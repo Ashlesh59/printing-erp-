@@ -108,7 +108,7 @@ class LicenseService {
             };
         }
 
-        // Validate payload fields
+        // Validate and normalize payload fields
         if (!payload || typeof payload !== 'object') {
             return { valid: false, state: LicenseState.INVALID, message: 'Invalid payload structure.' };
         }
@@ -117,24 +117,33 @@ class LicenseService {
             return { valid: false, state: LicenseState.INVALID, message: 'License is not designated for PrintShopManager.' };
         }
 
-        const licenseId = payload.license_id || payload.licenseId;
-        if (!licenseId || typeof licenseId !== 'string') {
+        const normalized = {
+            product: payload.product,
+            tier: String(payload.tier || 'PRO').toUpperCase(),
+            licenseId: payload.license_id || payload.licenseId,
+            shopId: payload.shop_id || payload.shopId,
+            shopName: payload.shop_name || payload.shopName || 'Authorized Print Shop',
+            expiresAt: payload.expires_at || payload.expiresAt,
+            issuedAt: payload.issued_at || payload.issuedAt,
+            maxDevices: payload.max_devices !== undefined ? payload.max_devices : (payload.maxDevices !== undefined ? payload.maxDevices : 5),
+            features: payload.features || []
+        };
+
+        if (!normalized.licenseId || typeof normalized.licenseId !== 'string') {
             return { valid: false, state: LicenseState.INVALID, message: 'Missing license ID in payload.' };
         }
 
-        const allowedTiers = ['STARTER', 'PRO', 'ENTERPRISE', 'COMMERCIAL'];
-        const tier = String(payload.tier || 'PRO').toUpperCase();
-        if (!allowedTiers.includes(tier)) {
+        const allowedTiers = ['STARTER', 'PRO', 'ENTERPRISE', 'COMMERCIAL', 'COMMUNITY'];
+        if (!allowedTiers.includes(normalized.tier)) {
             return { valid: false, state: LicenseState.INVALID, message: `Unknown license tier: ${payload.tier}` };
         }
 
         // Validate dates
-        const rawExpiry = payload.expires_at || payload.expiresAt;
-        if (!rawExpiry) {
+        if (!normalized.expiresAt) {
             return { valid: false, state: LicenseState.INVALID, message: 'Missing license expiration date.' };
         }
 
-        const expiryDate = new Date(rawExpiry);
+        const expiryDate = new Date(normalized.expiresAt);
         if (isNaN(expiryDate.getTime())) {
             return { valid: false, state: LicenseState.INVALID, message: 'Invalid expiration date format.' };
         }
@@ -149,9 +158,9 @@ class LicenseService {
             };
         }
 
-        if (payload.issued_at) {
-            const issuedDate = new Date(payload.issued_at);
-            if (!isNaN(issuedDate.getTime()) && issuedDate > new Date(this._now() + 86400000)) {
+        if (normalized.issuedAt) {
+            const issuedDate = new Date(normalized.issuedAt);
+            if (!isNaN(issuedDate.getTime()) && issuedDate.getTime() > (this._now() + 86400000)) {
                 return {
                     valid: false,
                     state: LicenseState.CLOCK_ROLLBACK,
@@ -163,11 +172,12 @@ class LicenseService {
         return {
             valid: true,
             state: LicenseState.VALID,
-            tier,
-            licenseId: payload.license_id,
-            shopName: payload.shop_name || 'Authorized Print Shop',
+            tier: normalized.tier,
+            licenseId: normalized.licenseId,
+            shopName: normalized.shopName,
             expiresAt: expiryDate.toISOString().split('T')[0],
-            issuedAt: payload.issued_at || null,
+            issuedAt: normalized.issuedAt || null,
+            maxDevices: normalized.maxDevices,
             message: 'Digital Ed25519 license verified successfully.',
             payload
         };

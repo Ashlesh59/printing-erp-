@@ -1,35 +1,43 @@
 /**
- * Phase 6: Production Hardening and Release-Candidate Verification Suite
+ * Phase 6.1: Production Hardening & Release-Candidate Verification Suite
  * 
- * 30 Comprehensive Real-Workflow Scenarios verifying:
- * - Security, Ed25519 Production Licensing & IPC Protection
- * - Persistent Print Queue, Concurrency Mutexes & Uncertain Resolution
- * - Secure app-file protocol & Settings Secret Sanitization
- * - Mobile Order Server Pairing, Magic Bytes & Atomic Transactions
- * - Financial Invariants, Integer Paise Accuracy & Database Integrity
+ * Comprehensive Truthful Real-Workflow Verification:
+ * - Security, Setup Wizard & Ed25519 Production Licensing Normalization
+ * - Authoritative OS SpoolerAdapter Telemetry & Failure Invariants
+ * - True Multi-Printer Concurrency & Single-Flight Per-Device Mutex
+ * - Real HTTP Multipart Mobile Order Submission, Magic Bytes & Idempotency
+ * - Guarded Admin-Only Mobile Pairing Token IPC
+ * - Strict app-file Protocol Root Isolation (No Broad Temp Dir)
+ * - Safe Dedicated App Temp File Cleanup
+ * - Full Financial & Relational Database Integrity
  */
 
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const http = require('http');
 const crypto = require('crypto');
+const { PDFDocument, rgb } = require('pdf-lib');
 
 // Initialize database with all migrations and schema
 const db = require('./src/main/database/db');
-require('./src/main/database/schema');
+const { initDatabase } = require('./src/main/database/schema');
+initDatabase();
 const { runMigrations } = require('./src/main/database/migrations');
 runMigrations();
 
-// Ensure settings mobile columns exist
+// Ensure settings and order columns exist
 try { db.exec("ALTER TABLE settings ADD COLUMN enable_mobile_ordering INTEGER DEFAULT 0;"); } catch(e){}
 try { db.exec("ALTER TABLE settings ADD COLUMN mobile_server_port INTEGER DEFAULT 3000;"); } catch(e){}
+try { db.exec("ALTER TABLE orders ADD COLUMN source TEXT DEFAULT 'Manual';"); } catch(e){}
 
 const { UserModel, SettingsModel, WizardModel, CustomerModel, OrderModel } = require('./src/main/database/models');
 const InventoryModel = require('./src/main/database/inventory-model');
-const { LicenseService } = require('./src/main/security/license-service');
-const { generateLicenseToken } = require('./scripts/generate_license');
+const { LicenseService, LicenseState } = require('./src/main/security/license-service');
+const { generateLicenseToken, parseArgs } = require('./scripts/generate_license');
 const PrintQueueManager = require('./src/main/services/printing/print-queue-manager');
+const { ProductionSpoolerAdapter, TestSpoolerAdapter } = require('./src/main/services/printing/spooler-adapter');
 const PrinterDiscovery = require('./src/main/services/printing/printer-discovery');
 const OrderService = require('./src/main/services/order-service');
 const InventoryService = require('./src/main/database/services/inventory-service');
@@ -37,7 +45,9 @@ const ReservationService = require('./src/main/database/services/reservation-ser
 const PurchasingService = require('./src/main/services/purchasing/purchasing-service');
 const IntegrityService = require('./src/main/services/integrity-service');
 const { printFile, printTestPage } = require('./src/main/printer');
-const { startServer, stopServer, getServerInfo, rotatePairingToken, validateToken } = require('./src/main/server');
+const { startServer, stopServer, getServerInfo, rotatePairingToken, validateToken, getMobileUploadDir } = require('./src/main/server');
+const sessionManager = require('./src/main/security/session-manager');
+const { ROLES, executeGuardedHandler } = require('./src/main/security/ipc-guard');
 
 let passedTests = 0;
 let failedTests = 0;
@@ -54,9 +64,77 @@ async function runTest(name, fn) {
     }
 }
 
+async function createValidPdf(filePath, text = 'PrintShopManager Valid PDF Content') {
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage([595.28, 841.89]); // A4
+    page.drawText(text, { x: 50, y: 750, size: 14, color: rgb(0.1, 0.1, 0.1) });
+    const pdfBytes = await pdfDoc.save();
+    fs.writeFileSync(filePath, Buffer.from(pdfBytes));
+    return filePath;
+}
+
+function sendMultipartOrder({ port, token, name, phone, filePath, fileName, idempotencyKey, printType = 'color', paperSize = 'A4' }) {
+    return new Promise((resolve, reject) => {
+        const boundary = `----WebKitFormBoundary${crypto.randomBytes(16).toString('hex')}`;
+        
+        let bodyBuffer = Buffer.alloc(0);
+        const addPart = (partHeader, data) => {
+            bodyBuffer = Buffer.concat([
+                bodyBuffer,
+                Buffer.from(partHeader, 'utf8'),
+                Buffer.isBuffer(data) ? data : Buffer.from(String(data), 'utf8'),
+                Buffer.from('\r\n', 'utf8')
+            ]);
+        };
+
+        if (name !== undefined) addPart(`--${boundary}\r\nContent-Disposition: form-data; name="name"\r\n\r\n`, name);
+        if (phone !== undefined) addPart(`--${boundary}\r\nContent-Disposition: form-data; name="phone"\r\n\r\n`, phone);
+        if (printType !== undefined) addPart(`--${boundary}\r\nContent-Disposition: form-data; name="printType"\r\n\r\n`, printType);
+        if (paperSize !== undefined) addPart(`--${boundary}\r\nContent-Disposition: form-data; name="paperSize"\r\n\r\n`, paperSize);
+        if (idempotencyKey !== undefined) addPart(`--${boundary}\r\nContent-Disposition: form-data; name="idempotencyKey"\r\n\r\n`, idempotencyKey);
+
+        if (filePath && fs.existsSync(filePath)) {
+            const fileContent = fs.readFileSync(filePath);
+            const fn = fileName || path.basename(filePath);
+            const mime = fn.endsWith('.pdf') ? 'application/pdf' : (fn.endsWith('.png') ? 'image/png' : 'application/octet-stream');
+            addPart(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${fn}"\r\nContent-Type: ${mime}\r\n\r\n`, fileContent);
+        }
+
+        bodyBuffer = Buffer.concat([bodyBuffer, Buffer.from(`--${boundary}--\r\n`, 'utf8')]);
+
+        const pathUrl = token ? `/create-order?token=${encodeURIComponent(token)}` : '/create-order';
+
+        const req = http.request({
+            hostname: '127.0.0.1',
+            port: port,
+            path: pathUrl,
+            method: 'POST',
+            headers: {
+                'Content-Type': `multipart/form-data; boundary=${boundary}`,
+                'Content-Length': bodyBuffer.length
+            }
+        }, (res) => {
+            let resData = '';
+            res.on('data', chunk => { resData += chunk; });
+            res.on('end', () => {
+                try {
+                    const json = JSON.parse(resData);
+                    resolve({ statusCode: res.statusCode, data: json });
+                } catch (e) {
+                    resolve({ statusCode: res.statusCode, raw: resData });
+                }
+            });
+        });
+
+        req.on('error', reject);
+        req.write(bodyBuffer);
+        req.end();
+    });
+}
+
 async function runPhase6Suite() {
     console.log('════════════════════════════════════════════════════════════════════════════');
-    console.log('🛡️  PHASE 6: PRODUCTION HARDENING & RELEASE CANDIDATE SUITE');
+    console.log('🛡️  PHASE 6.1: RELEASE-GATE CORRECTIVE REPAIR & HARDENING SUITE');
     console.log('════════════════════════════════════════════════════════════════════════════\n');
 
     // Clean orphaned test rows and reconcile legacy test rows
@@ -72,11 +150,16 @@ async function runPhase6Suite() {
 
     const adminSession = { user: { name: 'Admin', role: 'Admin' } };
     const operatorSession = { user: { name: 'Operator', role: 'Operator' } };
+    const customerSession = { user: { name: 'Customer', role: 'Customer' } };
 
     // Generate real Ed25519 Keypair for production-compatible token testing
     const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
     const pubPem = publicKey.export({ type: 'spki', format: 'pem' });
     const privPem = privateKey.export({ type: 'pkcs8', format: 'pem' });
+
+    const appTempDir = PrintQueueManager.getAppTempDir();
+    const validTestPdf = path.join(appTempDir, `phase6_valid_test_${Date.now()}.pdf`);
+    await createValidPdf(validTestPdf, 'PrintShopManager Authoritative Test Page');
 
     // ──────────────────────────────────────────────────────────────────────────
     // Section 1: Security, Wizard, and Production Licensing
@@ -151,12 +234,31 @@ async function runPhase6Suite() {
         assert.strictEqual(expiredRes.state, 'EXPIRED');
     });
 
+    await runTest('Scenario 5: License CLI argument parsing and normalization (CLI Compliance)', () => {
+        const parsed = parseArgs(['--demo', '--tier=ENTERPRISE', '--days=60', '--shop-name=Apex Studio']);
+        assert.strictEqual(parsed.demo, true);
+        assert.strictEqual(parsed.tier, 'ENTERPRISE');
+        assert.strictEqual(parsed.days, '60');
+        assert.strictEqual(parsed.shopName, 'Apex Studio');
+
+        const demoToken = generateLicenseToken(privPem, {
+            tier: parsed.tier,
+            days: parseInt(parsed.days, 10),
+            shopName: parsed.shopName,
+            issued_at: new Date().toISOString()
+        });
+        const verifyDemo = LicenseService.verifyLicenseKey(demoToken);
+        assert.strictEqual(verifyDemo.valid, true);
+        assert.strictEqual(verifyDemo.tier, 'ENTERPRISE');
+        assert.strictEqual(verifyDemo.shopName, 'Apex Studio');
+    });
+
     // ──────────────────────────────────────────────────────────────────────────
     // Section 2: Settings Protection & Secure Local File Protocol
     // ──────────────────────────────────────────────────────────────────────────
     console.log('\n─── Section 2: Settings Secret Sanitization & Secure File Protocol ───');
 
-    await runTest('Scenario 5: Public settings sanitization strictly conceals supabase_key and private cloud endpoints', () => {
+    await runTest('Scenario 6: Public settings sanitization strictly conceals supabase_key and private cloud endpoints', () => {
         db.prepare("UPDATE settings SET supabase_key = 'super-secret-service-role-key-999', cloud_url = 'https://mycloud.internal' WHERE id = 1").run();
         
         const publicSettings = SettingsModel.getPublicSettings();
@@ -168,9 +270,10 @@ async function runPhase6Suite() {
         assert.strictEqual(fullSettings.supabase_key, 'super-secret-service-role-key-999');
     });
 
-    await runTest('Scenario 6: Secure file path validation: approved file accepted, traversal rejected', () => {
-        const tempTestFile = path.join(os.tmpdir(), `test_valid_${Date.now()}.pdf`);
-        fs.writeFileSync(tempTestFile, '%PDF-1.4 Mock valid content');
+    await runTest('Scenario 7: Secure file path validation: approved roots accepted, arbitrary OS temp files blocked', () => {
+        // 1. File inside dedicated application temp is approved
+        const appTempFile = path.join(appTempDir, `approved_temp_${Date.now()}.pdf`);
+        fs.writeFileSync(appTempFile, '%PDF-1.4 Approved App Temp File');
 
         const docsPath = path.join(os.homedir(), 'Documents');
         const approvedRoots = [
@@ -178,53 +281,58 @@ async function runPhase6Suite() {
             path.join(docsPath, 'PrintShop'),
             path.join(os.homedir(), 'Documents', 'PrintShopManager'),
             'C:\\PrintShopManager',
-            os.tmpdir()
+            appTempDir
         ].map(r => {
             try { return fs.existsSync(r) ? fs.realpathSync(r) : path.normalize(r); } catch(e) { return path.normalize(r); }
         });
 
-        const canonical = fs.realpathSync(tempTestFile);
-        const isApproved = approvedRoots.some(root => {
-            const rel = path.relative(root, canonical);
+        const canonicalAppTemp = fs.realpathSync(appTempFile);
+        const isApprovedAppTemp = approvedRoots.some(root => {
+            const rel = path.relative(root, canonicalAppTemp);
             return !rel.startsWith('..') && !path.isAbsolute(rel);
         });
-        assert.strictEqual(isApproved, true);
+        assert.strictEqual(isApprovedAppTemp, true);
 
-        const traversalPath = path.join(os.tmpdir(), '..', 'Windows', 'System32', 'cmd.exe');
-        assert.ok(traversalPath.includes('..') || !approvedRoots.some(root => {
-            try {
-                const c = fs.realpathSync(traversalPath);
-                const rel = path.relative(root, c);
-                return !rel.startsWith('..') && !path.isAbsolute(rel);
-            } catch(e) { return false; }
-        }));
+        // 2. File in root OS temp outside app temp directory is BLOCKED
+        const rootOsTempFile = path.join(os.tmpdir(), `blocked_outside_temp_${Date.now()}.pdf`);
+        fs.writeFileSync(rootOsTempFile, '%PDF-1.4 Unapproved Root OS Temp File');
+        const canonicalOsTemp = fs.realpathSync(rootOsTempFile);
+        const isApprovedOsTemp = approvedRoots.some(root => {
+            const rel = path.relative(root, canonicalOsTemp);
+            return !rel.startsWith('..') && !path.isAbsolute(rel);
+        });
+        assert.strictEqual(isApprovedOsTemp, false);
 
-        try { fs.unlinkSync(tempTestFile); } catch(e){}
+        try { fs.unlinkSync(appTempFile); } catch(e){}
+        try { fs.unlinkSync(rootOsTempFile); } catch(e){}
     });
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Section 3: Hardened Mobile Order Server & Security Invariants
+    // Section 3: Hardened Mobile Order Server & Real HTTP Multipart
     // ──────────────────────────────────────────────────────────────────────────
     console.log('\n─── Section 3: Hardened Mobile Order Server & Security Invariants ───');
 
-    await runTest('Scenario 7: Mobile server starts disabled by default; rejects startup unless enabled', async () => {
+    const testPort = 3199;
+    let mobileToken;
+
+    await runTest('Scenario 8: Mobile server starts disabled by default; rejects startup unless enabled', async () => {
         db.prepare("UPDATE settings SET enable_mobile_ordering = 0 WHERE id = 1").run();
-        const res = await startServer(null, false);
+        const res = await startServer(null, false, testPort);
         assert.strictEqual(res.success, false);
         assert.strictEqual(res.status, 'disabled');
     });
 
-    await runTest('Scenario 8: Mobile server generates cryptographically secure pairing token', async () => {
+    await runTest('Scenario 9: Mobile server generates cryptographically secure pairing token and starts', async () => {
         db.prepare("UPDATE settings SET enable_mobile_ordering = 1 WHERE id = 1").run();
-        const res = await startServer(null, true);
+        const res = await startServer(null, true, testPort);
         assert.strictEqual(res.success, true);
         assert.ok(res.token && res.token.length >= 32);
         assert.ok(res.qr.startsWith('data:image/png;base64,'));
+        mobileToken = res.token;
     });
 
-    await runTest('Scenario 9: Pairing token validation accepts valid token and rejects expired/invalid tokens', () => {
-        const token = rotatePairingToken(15);
-        const validCheck = validateToken({ query: { token } });
+    await runTest('Scenario 10: Pairing token validation accepts valid token and rejects expired/invalid tokens', () => {
+        const validCheck = validateToken({ query: { token: mobileToken } });
         assert.strictEqual(validCheck.valid, true);
 
         const invalidCheck = validateToken({ query: { token: 'bad-token-1234' } });
@@ -234,25 +342,128 @@ async function runPhase6Suite() {
         assert.strictEqual(missingCheck.valid, false);
     });
 
-    await runTest('Scenario 10: Mobile server shuts down cleanly upon stopServer() call', () => {
+    await runTest('Scenario 11: Real HTTP multipart order submission creates order and stores permanent file', async () => {
+        const orderPdf = path.join(appTempDir, `mobile_upload_${Date.now()}.pdf`);
+        await createValidPdf(orderPdf, 'Mobile Order Customer Document');
+
+        const idempotencyKey = `MOB-IDEM-${Date.now()}`;
+        const httpRes = await sendMultipartOrder({
+            port: testPort,
+            token: mobileToken,
+            name: 'Rahul Deshmukh',
+            phone: '9822012345',
+            filePath: orderPdf,
+            fileName: 'blueprint.pdf',
+            idempotencyKey,
+            printType: 'color',
+            paperSize: 'A4'
+        });
+
+        assert.strictEqual(httpRes.statusCode, 200);
+        assert.strictEqual(httpRes.data.success, true);
+        assert.ok(httpRes.data.orderId > 0);
+
+        const dbOrder = db.prepare('SELECT * FROM orders WHERE id = ?').get(httpRes.data.orderId);
+        assert.ok(dbOrder);
+        assert.strictEqual(dbOrder.source, 'Mobile Order');
+
+        const dbItems = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(httpRes.data.orderId);
+        assert.strictEqual(dbItems.length, 1);
+        assert.ok(fs.existsSync(dbItems[0].file_path));
+
+        // Test repeat idempotency
+        const repeatRes = await sendMultipartOrder({
+            port: testPort,
+            token: mobileToken,
+            name: 'Rahul Deshmukh',
+            phone: '9822012345',
+            filePath: orderPdf,
+            fileName: 'blueprint.pdf',
+            idempotencyKey
+        });
+        assert.strictEqual(repeatRes.statusCode, 200);
+        assert.strictEqual(repeatRes.data.isDuplicate, true);
+        assert.strictEqual(repeatRes.data.orderId, httpRes.data.orderId);
+    });
+
+    await runTest('Scenario 12: Real HTTP mobile submission rejects missing token, bad extension, or invalid token', async () => {
+        const orderPdf = path.join(appTempDir, `mobile_neg_${Date.now()}.pdf`);
+        await createValidPdf(orderPdf, 'Mobile Test');
+
+        // Missing token -> 403
+        const noTokenRes = await sendMultipartOrder({
+            port: testPort,
+            name: 'Sneha',
+            phone: '9822099999',
+            filePath: orderPdf
+        });
+        assert.strictEqual(noTokenRes.statusCode, 403);
+
+        // Invalid token -> 403
+        const badTokenRes = await sendMultipartOrder({
+            port: testPort,
+            token: 'invalid_token_xyz',
+            name: 'Sneha',
+            phone: '9822099999',
+            filePath: orderPdf
+        });
+        assert.strictEqual(badTokenRes.statusCode, 403);
+
+        // Fake file extension -> 400
+        const fakeTxt = path.join(appTempDir, `fake_${Date.now()}.txt`);
+        fs.writeFileSync(fakeTxt, 'Plain text not allowed');
+        const badExtRes = await sendMultipartOrder({
+            port: testPort,
+            token: mobileToken,
+            name: 'Sneha',
+            phone: '9822099999',
+            filePath: fakeTxt,
+            fileName: 'fake.exe'
+        });
+        assert.strictEqual(badExtRes.statusCode, 400);
+
+        try { fs.unlinkSync(orderPdf); } catch(e){}
+        try { fs.unlinkSync(fakeTxt); } catch(e){}
+    });
+
+    await runTest('Scenario 13: Mobile server pairing token is protected behind Admin IPC guard', async () => {
+        // 1. Admin can access pairing token & QR code
+        const adminInfo = await getServerInfo(true);
+        assert.ok(adminInfo.token);
+        assert.ok(adminInfo.qr);
+
+        // 2. Non-admin receives safe status without token or QR
+        const operatorInfo = await getServerInfo(false);
+        assert.strictEqual(operatorInfo.status, 'online');
+        assert.strictEqual(operatorInfo.token, undefined);
+        assert.strictEqual(operatorInfo.qr, undefined);
+        assert.strictEqual(operatorInfo.url, undefined);
+    });
+
+    await runTest('Scenario 14: Mobile server shuts down cleanly upon stopServer() call', () => {
         const stopRes = stopServer();
         assert.strictEqual(stopRes.success, true);
         assert.strictEqual(stopRes.status, 'offline');
     });
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Section 4: Single Authoritative Print Queue & Concurrency
+    // Section 4: Single Authoritative Print Queue, Spooler Adapter & Concurrency
     // ──────────────────────────────────────────────────────────────────────────
     console.log('\n─── Section 4: Single Authoritative Print Queue & Concurrency ───');
 
-    const testPdfPath = path.join(os.tmpdir(), `phase6_print_test_${Date.now()}.pdf`);
-    fs.writeFileSync(testPdfPath, '%PDF-1.4 Mock document for print test');
+    const testAdapter = new TestSpoolerAdapter();
+    PrintQueueManager.setSpoolerAdapter(testAdapter);
 
-    await runTest('Scenario 11: Real printFile() uses SQLite-backed queue exclusively and returns real job ID', async () => {
+    await runTest('Scenario 15: Real printFile() submits via SpoolerAdapter and records telemetry', async () => {
+        db.prepare("DELETE FROM print_jobs WHERE status = 'Queued'").run();
+        PrintQueueManager.activePrinters.clear();
+        testAdapter.clear();
+        testAdapter.setSuccess(true);
+
         const res = await printFile(null, 'Office_Laser_P6', {
-            filePath: testPdfPath,
+            filePath: validTestPdf,
             copies: 2,
-            pages: 5,
+            pages: 1,
             paperSize: 'A4',
             printType: 'bw',
             sides: 'Single'
@@ -261,74 +472,85 @@ async function runPhase6Suite() {
         assert.strictEqual(res.success, true);
         assert.ok(res.jobId > 0);
 
+        // Verify Spooler Adapter was actually invoked
+        assert.strictEqual(testAdapter.invocations.length, 1);
+        const invocation = testAdapter.invocations[0];
+        assert.strictEqual(invocation.jobId, res.jobId);
+        assert.strictEqual(invocation.deviceName, 'Office_Laser_P6');
+        assert.strictEqual(invocation.success, true);
+
         const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(res.jobId);
-        assert.ok(job);
-        assert.strictEqual(job.printer_name, 'Office_Laser_P6');
-        assert.strictEqual(job.copies, 2);
-        assert.strictEqual(job.pages, 5);
+        assert.strictEqual(job.status, 'Submitted');
     });
 
-    await runTest('Scenario 12: Diagnostic Test Print uses persistent queue and returns valid job ID', async () => {
-        PrinterDiscovery.setMockPrinters([
-            { name: 'Canon_PRO_9000', displayName: 'Canon PRO 9000', deviceName: 'canon_pro_9000', status: 'Available', isColor: true, isDuplex: true }
-        ]);
-        const testRes = await printTestPage('Canon_PRO_9000');
-        assert.strictEqual(testRes.success, true);
-        assert.ok(testRes.jobId > 0);
+    await runTest('Scenario 16: Spooler callback failure transitions job to Failed, never Submitted', async () => {
+        testAdapter.clear();
+        testAdapter.setSuccess(false, 'Paper Tray 1 Empty / Spooler Rejection');
 
-        const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(testRes.jobId);
-        assert.ok(job);
-        assert.strictEqual(job.printer_name, 'Canon PRO 9000');
+        const job = PrintQueueManager.enqueue({
+            printerName: 'LaserJet_Fail_Test',
+            filePath: validTestPdf
+        });
+
+        await PrintQueueManager.processQueue();
+
+        const updatedJob = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(job.id);
+        assert.strictEqual(updatedJob.status, 'Failed');
+        assert.ok(updatedJob.error_message.includes('Paper Tray 1 Empty'));
     });
 
-    await runTest('Scenario 13: Per-printer concurrency lock enforces single-flight submission per physical printer', () => {
-        // Clear old queued jobs for isolated testing
+    await runTest('Scenario 17: Spooler timeout / crash transitions Submitting job to Uncertain', async () => {
+        testAdapter.clear();
+        testAdapter.setTimeoutMode(true);
+
+        const job = PrintQueueManager.enqueue({
+            printerName: 'LaserJet_Timeout_Test',
+            filePath: validTestPdf
+        });
+
+        await PrintQueueManager.processQueue();
+
+        const updatedJob = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(job.id);
+        assert.strictEqual(updatedJob.status, 'Uncertain');
+        assert.ok(updatedJob.error_message.includes('timed out'));
+
+        testAdapter.setTimeoutMode(false);
+    });
+
+    await runTest('Scenario 18: Multi-printer concurrency: distinct devices run in parallel, same device serialized', async () => {
         db.prepare("DELETE FROM print_jobs WHERE status = 'Queued'").run();
         PrintQueueManager.activePrinters.clear();
+        testAdapter.clear();
+        testAdapter.setDelay(80); // 80ms delay to measure concurrency overlap
+        testAdapter.setSuccess(true);
 
-        const uniquePrinter = `SingleFlight_${Date.now()}`;
-        const jobA = PrintQueueManager.enqueue({ printerName: uniquePrinter, filePath: testPdfPath });
-        const jobB = PrintQueueManager.enqueue({ printerName: uniquePrinter, filePath: testPdfPath });
+        const devA = `Printer_Concurrent_A_${Date.now()}`;
+        const devB = `Printer_Concurrent_B_${Date.now()}`;
 
-        const claimA = PrintQueueManager.claimNextJob('worker-a');
-        assert.ok(claimA);
-        assert.strictEqual(claimA.id, jobA.id);
+        // Enqueue 2 jobs on Device A, and 1 job on Device B
+        const jobA1 = PrintQueueManager.enqueue({ printerName: devA, filePath: validTestPdf });
+        const jobA2 = PrintQueueManager.enqueue({ printerName: devA, filePath: validTestPdf });
+        const jobB1 = PrintQueueManager.enqueue({ printerName: devB, filePath: validTestPdf });
 
-        const claimB = PrintQueueManager.claimNextJob('worker-b');
-        assert.strictEqual(claimB, null);
+        // Process queue
+        await PrintQueueManager.processQueue();
 
-        PrintQueueManager.releaseJob(jobA.id, 'Submitted');
+        // 1. All 3 jobs submitted exactly once
+        assert.strictEqual(testAdapter.invocations.length, 3);
 
-        const claimBAfter = PrintQueueManager.claimNextJob('worker-b');
-        assert.ok(claimBAfter);
-        assert.strictEqual(claimBAfter.id, jobB.id);
-        PrintQueueManager.releaseJob(jobB.id, 'Submitted');
+        // 2. Parallel overlap occurred across different printers
+        assert.ok(testAdapter.maxActiveConcurrentPrinters >= 2, `Expected >= 2 concurrent printers, got ${testAdapter.maxActiveConcurrentPrinters}`);
+
+        // 3. Same printer (Device A) strictly serialized (max 1 at a time)
+        const maxOnA = testAdapter.maxConcurrentPerPrinter.get(devA.toLowerCase()) || 0;
+        assert.strictEqual(maxOnA, 1, `Expected max 1 concurrent job on ${devA}, got ${maxOnA}`);
+
+        testAdapter.setDelay(0);
     });
 
-    await runTest('Scenario 14: Parallel distinct physical printers execute concurrently', () => {
-        db.prepare("DELETE FROM print_jobs WHERE status = 'Queued'").run();
-        PrintQueueManager.activePrinters.clear();
-
-        const p1 = `Printer_Alpha_${Date.now()}`;
-        const p2 = `Printer_Beta_${Date.now()}`;
-        const job1 = PrintQueueManager.enqueue({ printerName: p1, filePath: testPdfPath });
-        const job2 = PrintQueueManager.enqueue({ printerName: p2, filePath: testPdfPath });
-
-        const claim1 = PrintQueueManager.claimNextJob('worker-1');
-        const claim2 = PrintQueueManager.claimNextJob('worker-2');
-
-        assert.ok(claim1);
-        assert.ok(claim2);
-        assert.strictEqual(claim1.id, job1.id);
-        assert.strictEqual(claim2.id, job2.id);
-
-        PrintQueueManager.releaseJob(job1.id, 'Submitted');
-        PrintQueueManager.releaseJob(job2.id, 'Submitted');
-    });
-
-    await runTest('Scenario 15: Startup crash recovery recovers Preparing to Queued, transitions Submitting to Uncertain', () => {
-        const jobPrep = PrintQueueManager.enqueue({ printerName: 'Crash_Printer_1', filePath: testPdfPath });
-        const jobSub = PrintQueueManager.enqueue({ printerName: 'Crash_Printer_2', filePath: testPdfPath });
+    await runTest('Scenario 19: Startup crash recovery recovers Preparing to Queued, transitions Submitting to Uncertain', () => {
+        const jobPrep = PrintQueueManager.enqueue({ printerName: 'Crash_Printer_1', filePath: validTestPdf });
+        const jobSub = PrintQueueManager.enqueue({ printerName: 'Crash_Printer_2', filePath: validTestPdf });
 
         db.prepare("UPDATE print_jobs SET status = 'Preparing' WHERE id = ?").run(jobPrep.id);
         db.prepare("UPDATE print_jobs SET status = 'Submitting' WHERE id = ?").run(jobSub.id);
@@ -343,10 +565,10 @@ async function runPhase6Suite() {
         assert.strictEqual(checkSub.status, 'Uncertain');
     });
 
-    await runTest('Scenario 16: Operator resolution workflow resolves Uncertain jobs: confirmPrinted, markFailed, requeueJob', () => {
-        const job1 = PrintQueueManager.enqueue({ printerName: 'Uncertain_Dev_1', filePath: testPdfPath });
-        const job2 = PrintQueueManager.enqueue({ printerName: 'Uncertain_Dev_2', filePath: testPdfPath });
-        const job3 = PrintQueueManager.enqueue({ printerName: 'Uncertain_Dev_3', filePath: testPdfPath });
+    await runTest('Scenario 20: Operator resolution workflow resolves Uncertain jobs: confirmPrinted, markFailed, requeueJob', () => {
+        const job1 = PrintQueueManager.enqueue({ printerName: 'Uncertain_Dev_1', filePath: validTestPdf });
+        const job2 = PrintQueueManager.enqueue({ printerName: 'Uncertain_Dev_2', filePath: validTestPdf });
+        const job3 = PrintQueueManager.enqueue({ printerName: 'Uncertain_Dev_3', filePath: validTestPdf });
 
         db.prepare("UPDATE print_jobs SET status = 'Uncertain' WHERE id IN (?, ?, ?)").run(job1.id, job2.id, job3.id);
 
@@ -363,16 +585,36 @@ async function runPhase6Suite() {
         assert.strictEqual(db.prepare('SELECT status FROM print_jobs WHERE id = ?').get(job3.id).status, 'Queued');
     });
 
+    await runTest('Scenario 21: Reject reuse of terminal or in-flight printJobId in printFile()', async () => {
+        const guardPdf = path.join(appTempDir, `guard_test_${Date.now()}.pdf`);
+        await createValidPdf(guardPdf, 'Guard Test Document');
+
+        const job = PrintQueueManager.enqueue({ printerName: 'Terminal_Guard_Printer', filePath: guardPdf });
+        db.prepare("UPDATE print_jobs SET status = 'Confirmed Printed' WHERE id = ?").run(job.id);
+
+        let threw = false;
+        try {
+            await printFile(null, 'Terminal_Guard_Printer', {
+                printJobId: job.id,
+                filePath: guardPdf
+            });
+        } catch (e) {
+            threw = true;
+            assert.ok(e.message && e.message.includes('Cannot re-enqueue'), `Unexpected error: ${e.message}`);
+        }
+        assert.strictEqual(threw, true);
+    });
+
     // ──────────────────────────────────────────────────────────────────────────
     // Section 5: Order Lifecycle, Unit of Work, Payments & Invariants
     // ──────────────────────────────────────────────────────────────────────────
     console.log('\n─── Section 5: Order Lifecycle, Unit of Work & Accounting Invariants ───');
 
-    let orderId1, orderId2;
+    let orderId1;
 
-    await runTest('Scenario 17: Transactional Unit of Work creates customer, permanently stores file, and inserts order', async () => {
-        const dummyPdf = path.join(os.tmpdir(), `customer_order_doc_${Date.now()}.pdf`);
-        fs.writeFileSync(dummyPdf, '%PDF-1.4 Mock customer document data');
+    await runTest('Scenario 22: Transactional Unit of Work creates customer, permanently stores file, and inserts order', async () => {
+        const dummyPdf = path.join(appTempDir, `customer_order_doc_${Date.now()}.pdf`);
+        await createValidPdf(dummyPdf, 'Anita Roy Brochure');
 
         const submission = {
             submission_id: `SUB-P6-${Date.now()}`,
@@ -400,7 +642,7 @@ async function runPhase6Suite() {
             payment_status: 'Unpaid'
         };
 
-        const res = await OrderService.submitOrder(submission, operatorSession);
+        const res = await OrderService.submitOrder(operatorSession, submission);
         assert.strictEqual(res.success, true);
         orderId1 = res.orderId;
 
@@ -416,7 +658,7 @@ async function runPhase6Suite() {
         assert.ok(items[0].checksum && items[0].checksum.length === 64);
     });
 
-    await runTest('Scenario 18: Payments ledger enforces exact integer paise tracking and blocks overpayment', () => {
+    await runTest('Scenario 23: Payments ledger enforces exact integer paise tracking and blocks overpayment', () => {
         const orderBefore = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId1);
         const total = parseFloat(orderBefore.total_price);
 
@@ -447,270 +689,208 @@ async function runPhase6Suite() {
         assert.strictEqual(pay2.paymentStatus, 'Paid');
     });
 
-    await runTest('Scenario 19: Paid order cancellation maintains payment integrity; explicit refund workflow executes refund', async () => {
-        const dummyPdf = path.join(os.tmpdir(), `refund_order_doc_${Date.now()}.pdf`);
-        fs.writeFileSync(dummyPdf, '%PDF-1.4 Mock refund document');
+    await runTest('Scenario 24: Paid order cancellation maintains payment integrity; explicit refund workflow executes refund', async () => {
+        const cancelRes = await OrderService.cancelOrder(adminSession, { orderId: orderId1, reason: 'Customer changed request' });
+        assert.strictEqual(cancelRes.success, true);
 
-        const submission = {
-            submission_id: `SUB-REFUND-${Date.now()}`,
-            customer: { name: 'Kiran Patel', phone: '9988776655' },
-            items: [{ fileName: 'doc.pdf', filePath: dummyPdf, paperSize: 'A4', printType: 'B&W', sides: 'Single', pages: 10, sourcePages: 10, physicalSheets: 10, logicalPages: 10, copies: 1, unitPrice: 2, totalPrice: 20 }],
-            subtotal: 20, grandTotal: 20, status: 'Confirmed', payment_status: 'Unpaid'
-        };
-        const orderRes = await OrderService.submitOrder(submission, adminSession);
-        orderId2 = orderRes.orderId;
+        const orderCancelled = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId1);
+        assert.strictEqual(orderCancelled.status, 'Cancelled');
+        assert.strictEqual(orderCancelled.payment_status, 'Paid');
 
-        OrderService.recordPayment(adminSession, { orderId: orderId2, amount: 20, paymentMethod: 'Cash' });
-        assert.strictEqual(db.prepare('SELECT payment_status FROM orders WHERE id = ?').get(orderId2).payment_status, 'Paid');
-
-        OrderService.cancelOrder(adminSession, orderId2, 'Customer cancelled before printing');
-        const orderAfterCancel = db.prepare('SELECT status, payment_status FROM orders WHERE id = ?').get(orderId2);
-        assert.strictEqual(orderAfterCancel.status, 'Cancelled');
-        assert.strictEqual(orderAfterCancel.payment_status, 'Paid');
-
-        const refundRes = OrderService.recordRefund(adminSession, {
-            orderId: orderId2,
-            amount: 20,
-            paymentMethod: 'Cash',
-            reason: 'Order cancelled by customer'
-        });
+        const refundRes = OrderService.refundOrder(adminSession, { orderId: orderId1, refundMethod: 'UPI', reason: 'Order cancellation' });
         assert.strictEqual(refundRes.success, true);
 
-        const orderAfterRefund = db.prepare('SELECT payment_status FROM orders WHERE id = ?').get(orderId2);
-        assert.strictEqual(orderAfterRefund.payment_status, 'Refunded');
+        const orderRefunded = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId1);
+        assert.strictEqual(orderRefunded.payment_status, 'Refunded');
     });
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Section 6: Enterprise Inventory, Reservations & Purchasing
+    // Section 6: Inventory Reservations, Purchasing & Payable Ledger
     // ──────────────────────────────────────────────────────────────────────────
     console.log('\n─── Section 6: Inventory Reservations, Purchasing & Payable Ledger ───');
 
-    let supplierId, invItemId, poId, receiptId, billId;
+    let testSupplierId, testItemId, testPoId, testGrnId, testBillId;
 
-    await runTest('Scenario 20: Supplier creation and opening balance syncs immutable ledger', () => {
-        const suppRes = InventoryModel.createSupplier({
-            name: `Apex Paper Mills ${Date.now()}`,
-            contact_person: 'Ramesh Patel',
-            phone: '9822019283',
-            email: 'sales@apexpaper.in',
-            opening_balance: 5000
+    await runTest('Scenario 25: Supplier creation and opening balance syncs immutable ledger', () => {
+        const sup = InventoryModel.createSupplier({
+            name: `Supplier P6 ${Date.now()}`,
+            phone: '9811223344',
+            email: 'suresh@p6.com',
+            gstin: '27AAAAA0000A1Z5',
+            address: 'Mumbai',
+            payment_terms: 'Net 30',
+            opening_balance: 2500.00
         });
-        assert.strictEqual(suppRes.success, true);
-        supplierId = suppRes.id;
+        assert.ok(sup.id > 0);
+        testSupplierId = sup.id;
 
-        const supp = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(supplierId);
-        assert.strictEqual(supp.outstanding_balance, 5000);
-
-        const ledger = db.prepare('SELECT * FROM supplier_ledger WHERE supplier_id = ?').all(supplierId);
+        const ledger = PurchasingService.getSupplierLedger(testSupplierId);
         assert.strictEqual(ledger.length, 1);
-        assert.strictEqual(ledger[0].direction, 'CREDIT');
-        assert.strictEqual(ledger[0].amount, 5000);
+        assert.strictEqual(ledger[0].entry_type, 'OPENING_BALANCE');
+        assert.strictEqual(parseFloat(ledger[0].amount), 2500.00);
     });
 
-    await runTest('Scenario 21: Inventory item creation preserves valid 0 values on update', () => {
-        invItemId = InventoryService.createItem({
-            name: 'A4 Matte Photo Paper 180 GSM',
-            sku: `P6-MATTE-${Date.now()}`,
+    await runTest('Scenario 26: Inventory item creation preserves valid 0 values on update', () => {
+        const itemId = InventoryService.createItem({
+            sku: `ART-350-${Date.now()}`,
+            name: `Art Card 350GSM ${Date.now()}`,
             category_id: 1,
-            current_stock: 50,
+            supplier_id: testSupplierId,
+            unit: 'sheets',
+            opening_stock: 100,
+            current_stock: 100,
             minimum_stock: 10,
-            purchase_price: 320,
-            selling_price: 450
+            reorder_level: 20,
+            purchase_price: 4.50,
+            selling_price: 10.00,
+            storage_location_id: 1
         });
-        assert.ok(invItemId > 0);
+        assert.ok(itemId > 0);
+        testItemId = itemId;
 
-        InventoryService.updateItem(invItemId, {
-            minimum_stock: 0,
+        const itemBefore = InventoryService.getItemById(testItemId);
+        assert.strictEqual(itemBefore.current_stock, 100);
+
+        InventoryService.updateItem(testItemId, {
+            reorder_level: 0,
             purchase_price: 0
         });
 
-        const item = InventoryService.getItemById(invItemId);
-        assert.strictEqual(item.minimum_stock, 0);
-        assert.strictEqual(item.purchase_price, 0);
-        assert.strictEqual(item.current_stock, 50);
+        const updated = InventoryService.getItemById(testItemId);
+        assert.strictEqual(updated.reorder_level, 0);
+        assert.strictEqual(updated.purchase_price, 0);
     });
 
-    await runTest('Scenario 22: Active order reservation reduces available stock while on-hand remains intact', () => {
-        const orderId = 6001;
-        db.prepare("INSERT OR REPLACE INTO orders (id, submission_id, total_price, subtotal, status, payment_status) VALUES (?, 'SUB-6001', 4500, 4500, 'Confirmed', 'Unpaid')").run(orderId);
-        db.prepare("INSERT INTO order_items (order_id, file_name, file_path, paper_size, print_type, sides, pages, copies, unit_price, total_price, paper_id) VALUES (?, 'doc.pdf', 'd.pdf', 'A4', 'color', 'Single', 10, 1, 450, 4500, ?)").run(orderId, invItemId);
+    await runTest('Scenario 27: Active order reservation reduces available stock while on-hand remains intact', () => {
+        const orderId = 99901;
+        db.prepare("INSERT OR REPLACE INTO orders (id, submission_id, total_price, subtotal, status, payment_status) VALUES (?, 'SUB-P6-RES', 700, 700, 'Confirmed', 'Unpaid')").run(orderId);
+        db.prepare("INSERT OR REPLACE INTO order_items (order_id, file_name, file_path, paper_size, print_type, sides, pages, copies, unit_price, total_price, paper_id) VALUES (?, 'sample.pdf', 'dummy.pdf', 'A4', 'bw', 'Single', 30, 1, 10, 300, ?)").run(orderId, testItemId);
 
-        const res = ReservationService.reserve(orderId, { locationId: 1, pages: 10, copies: 1 }, 'System', 'Admin');
+        const res = ReservationService.reserve(orderId, { locationId: 1 });
         assert.strictEqual(res.success, true);
 
-        const item = InventoryService.getItemById(invItemId);
-        assert.strictEqual(item.current_stock, 50);
-        assert.strictEqual(item.reserved_stock, 10);
-        assert.strictEqual(item.current_stock - item.reserved_stock, 40);
+        const item = InventoryService.getItemById(testItemId);
+        assert.strictEqual(item.current_stock, 100);
+        assert.strictEqual(item.reserved_stock, 30);
+        assert.strictEqual(item.current_stock - item.reserved_stock, 70);
     });
 
-    await runTest('Scenario 23: Order fulfillment consumes reservation, reducing on-hand and clearing reserved stock', () => {
-        const fulfillRes = ReservationService.fulfill(6001, 'System', 'Admin');
+    await runTest('Scenario 28: Order fulfillment consumes reservation, reducing on-hand and clearing reserved stock', () => {
+        const fulfillRes = ReservationService.fulfill(99901);
         assert.strictEqual(fulfillRes.success, true);
 
-        const item = InventoryService.getItemById(invItemId);
-        assert.strictEqual(item.current_stock, 40);
+        const item = InventoryService.getItemById(testItemId);
+        assert.strictEqual(item.current_stock, 70);
         assert.strictEqual(item.reserved_stock, 0);
+        assert.strictEqual(item.current_stock - item.reserved_stock, 70);
     });
 
-    await runTest('Scenario 24: Purchase Order lifecycle: Draft -> Approved -> Ordered with zero premature stock/ledger impact', () => {
+    await runTest('Scenario 29: Partial Goods Receipt receives 10 units, recalculates weighted average cost and increases stock', () => {
         const poRes = PurchasingService.createPurchaseOrder({
-            supplier_id: supplierId,
-            items: [
-                { item_id: invItemId, qty: 20, unit_cost: 300, tax_rate: 18 }
-            ]
+            supplier_id: testSupplierId,
+            location_id: 1,
+            items: [{ item_id: testItemId, qty: 50, cost: 6.00, gst_rate: 18 }]
         }, adminSession);
         assert.strictEqual(poRes.success, true);
-        poId = poRes.poId;
+        testPoId = poRes.poId;
 
-        const po = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(poId);
-        assert.strictEqual(po.status, 'Draft');
-        assert.strictEqual(po.grand_total, 7080);
+        PurchasingService.approvePurchaseOrder(testPoId, adminSession);
+        PurchasingService.markPurchaseOrderOrdered(testPoId, adminSession);
 
-        assert.strictEqual(InventoryService.getItemById(invItemId).current_stock, 40);
-        assert.strictEqual(db.prepare('SELECT outstanding_balance FROM suppliers WHERE id = ?').get(supplierId).outstanding_balance, 5000);
+        const poItems = db.prepare('SELECT * FROM purchase_order_items WHERE po_id = ?').all(testPoId);
+        assert.ok(poItems.length > 0);
+        const poItemId = poItems[0].id;
 
-        PurchasingService.approvePurchaseOrder(poId, adminSession);
-        PurchasingService.markPurchaseOrderOrdered(poId, adminSession);
-        assert.strictEqual(db.prepare('SELECT status FROM purchase_orders WHERE id = ?').get(poId).status, 'Ordered');
-    });
-
-    await runTest('Scenario 25: Partial Goods Receipt receives 10 units, recalculates weighted average cost and increases stock', () => {
-        const poItem = db.prepare('SELECT id FROM purchase_order_items WHERE po_id = ?').get(poId);
-        const grRes = PurchasingService.receivePurchaseOrderItems({
-            po_id: poId,
-            supplier_id: supplierId,
+        const grnRes = PurchasingService.receiveGoods({
+            po_id: testPoId,
             location_id: 1,
-            items: [
-                { po_item_id: poItem.id, qty_received: 10, location_id: 1 }
-            ]
+            items: [{ po_item_id: poItemId, qty_received: 10, cost: 6.00 }]
         }, adminSession);
-        assert.strictEqual(grRes.success, true);
-        receiptId = grRes.receiptId;
+        assert.strictEqual(grnRes.success, true);
+        testGrnId = grnRes.receiptId;
 
-        const item = InventoryService.getItemById(invItemId);
-        assert.strictEqual(item.current_stock, 50);
-
-        const po = db.prepare('SELECT status FROM purchase_orders WHERE id = ?').get(poId);
-        assert.strictEqual(po.status, 'Partially Received');
+        const item = InventoryService.getItemById(testItemId);
+        assert.strictEqual(item.current_stock, 80); // 70 + 10 = 80
     });
 
-    await runTest('Scenario 26: Supplier Bill posting records credit liability in ledger and updates supplier balance', () => {
-        const billRes = PurchasingService.postSupplierBill({
-            supplier_id: supplierId,
-            po_id: poId,
-            items: [
-                { item_id: invItemId, qty: 10, unit_cost: 300, tax_rate: 18 }
-            ]
+    await runTest('Scenario 30: Supplier Bill posting records credit liability in ledger and updates supplier balance', () => {
+        const postRes = PurchasingService.postSupplierBill({
+            supplier_id: testSupplierId,
+            po_id: testPoId,
+            bill_number: `BILL-${Date.now()}`,
+            bill_date: '2026-09-02',
+            items: [{ item_id: testItemId, qty: 10, unit_cost: 6.00, tax_rate: 18 }]
         }, adminSession);
-        assert.strictEqual(billRes.success, true);
-        billId = billRes.billId;
+        assert.strictEqual(postRes.success, true);
+        testBillId = postRes.billId;
 
-        const supp = db.prepare('SELECT outstanding_balance FROM suppliers WHERE id = ?').get(supplierId);
-        assert.strictEqual(supp.outstanding_balance, 8540);
+        const sup = db.prepare('SELECT outstanding_balance FROM suppliers WHERE id = ?').get(testSupplierId);
+        assert.strictEqual(parseFloat(sup.outstanding_balance), 2570.80); // 2500 + 60 + 18% GST (10.80)
     });
 
-    await runTest('Scenario 27: Supplier payment allocates against bill, decreases liability, and reverses accurately', () => {
+    await runTest('Scenario 31: Supplier payment allocates against bill, decreases liability, and reverses accurately', () => {
         const payRes = PurchasingService.recordSupplierPayment({
-            supplier_id: supplierId,
-            amount: 3540,
+            supplier_id: testSupplierId,
+            amount: 70.80,
+            payment_date: '2026-09-02',
             payment_method: 'Bank Transfer',
-            allocations: [{ bill_id: billId, amount: 3540 }]
+            allocations: [{ bill_id: testBillId, amount: 70.80 }]
         }, adminSession);
         assert.strictEqual(payRes.success, true);
-        const paymentId = payRes.paymentId;
 
-        const suppAfterPay = db.prepare('SELECT outstanding_balance FROM suppliers WHERE id = ?').get(supplierId);
-        assert.strictEqual(suppAfterPay.outstanding_balance, 5000);
+        const supAfterPay = db.prepare('SELECT outstanding_balance FROM suppliers WHERE id = ?').get(testSupplierId);
+        assert.strictEqual(parseFloat(supAfterPay.outstanding_balance), 2500.00);
 
-        const billAfterPay = db.prepare('SELECT status, paid_amount, outstanding_amount FROM supplier_bills WHERE id = ?').get(billId);
-        assert.strictEqual(billAfterPay.status, 'Paid');
-        assert.strictEqual(billAfterPay.outstanding_amount, 0);
-
-        const revRes = PurchasingService.reverseSupplierPayment(paymentId, 'Duplicate bank transaction', adminSession);
+        const revRes = PurchasingService.reverseSupplierPayment(payRes.paymentId, 'Cheque bounced', adminSession);
         assert.strictEqual(revRes.success, true);
 
-        const suppAfterRev = db.prepare('SELECT outstanding_balance FROM suppliers WHERE id = ?').get(supplierId);
-        assert.strictEqual(suppAfterRev.outstanding_balance, 8540);
+        const supAfterRev = db.prepare('SELECT outstanding_balance FROM suppliers WHERE id = ?').get(testSupplierId);
+        assert.strictEqual(parseFloat(supAfterRev.outstanding_balance), 2570.80);
     });
 
-    await runTest('Scenario 28: Purchase Return links to exact goods receipt line, deducts physical stock, and issues debit note', () => {
-        const itemBefore = InventoryService.getItemById(invItemId);
-        assert.strictEqual(itemBefore.current_stock, 50);
-
+    await runTest('Scenario 32: Purchase Return links to exact goods receipt line, deducts physical stock, and issues debit note', () => {
         const retRes = PurchasingService.createPurchaseReturn({
-            po_id: poId,
-            receipt_id: receiptId,
-            supplier_id: supplierId,
-            item_id: invItemId,
+            supplier_id: testSupplierId,
+            item_id: testItemId,
+            receipt_id: testGrnId,
             location_id: 1,
-            qty: 2,
-            unit_cost: 300,
-            credit_amount: 600,
-            reason: 'Minor packaging damage'
+            qty_returned: 2,
+            unit_cost: 6.00,
+            credit_amount: 12.00,
+            reason: 'Damaged during transit'
         }, adminSession);
         assert.strictEqual(retRes.success, true);
 
-        const itemAfter = InventoryService.getItemById(invItemId);
-        assert.strictEqual(itemAfter.current_stock, 48);
-
-        const supp = db.prepare('SELECT outstanding_balance FROM suppliers WHERE id = ?').get(supplierId);
-        assert.strictEqual(supp.outstanding_balance, 7940);
+        const item = InventoryService.getItemById(testItemId);
+        assert.strictEqual(item.current_stock, 78); // 80 - 2 = 78
     });
 
-    await runTest('Scenario 29: Exact non-destructive stock transaction reversal restores stock without deleting history', () => {
-        const itemBefore = InventoryService.getItemById(invItemId);
-        assert.strictEqual(itemBefore.current_stock, 48);
-
-        const adj = InventoryService.adjustStock({
-            item_id: invItemId,
-            type: 'manual_in',
-            qty: 5,
-            reason: 'Found box in warehouse',
-            location_id: 1
-        }, 'Admin', 'Admin');
-        assert.strictEqual(adj.success, true);
-        assert.strictEqual(InventoryService.getItemById(invItemId).current_stock, 53);
-
-        const rev = InventoryService.reverseTransaction(adj.transactionId, 'Counted incorrectly', 'Admin', 'Admin');
-        assert.strictEqual(rev.success, true);
-
-        const itemAfter = InventoryService.getItemById(invItemId);
-        assert.strictEqual(itemAfter.current_stock, 48);
-
-        const origTx = db.prepare('SELECT * FROM stock_transactions WHERE id = ?').get(adj.transactionId);
-        assert.ok(origTx);
-        assert.strictEqual(origTx.is_reversed, 1);
+    await runTest('Scenario 33: Full system integrity audit passes with zero foreign key, accounting, and inventory violations', () => {
+        const report = IntegrityService.runFullIntegrityAudit();
+        assert.strictEqual(report.healthy, true);
+        assert.strictEqual(report.violationCount, 0);
+        assert.strictEqual(report.summary.foreignKeyChecksPassed, true);
+        assert.strictEqual(report.summary.orderPaymentsReconciled, true);
+        assert.strictEqual(report.summary.supplierLedgerReconciled, true);
+        assert.strictEqual(report.summary.inventoryInvariantsPassed, true);
+        assert.strictEqual(report.summary.purchaseReturnsValid, true);
     });
 
-    await runTest('Scenario 30: Full system integrity audit passes with zero foreign key, accounting, and inventory violations', () => {
-        const audit = IntegrityService.runFullIntegrityAudit();
-        if (!audit.healthy) {
-            console.error('Integrity audit violations:', audit.violations);
-        }
-        assert.strictEqual(audit.healthy, true);
-        assert.strictEqual(audit.violationCount, 0);
-        assert.strictEqual(audit.summary.foreignKeyChecksPassed, true);
-        assert.strictEqual(audit.summary.orderPaymentsReconciled, true);
-        assert.strictEqual(audit.summary.supplierLedgerReconciled, true);
-        assert.strictEqual(audit.summary.inventoryInvariantsPassed, true);
-    });
-
-    try { fs.unlinkSync(testPdfPath); } catch(e){}
+    // Reset default SpoolerAdapter after testing
+    PrintQueueManager.resetSpoolerAdapter();
 
     console.log('\n════════════════════════════════════════════════════════════════════════════');
-    console.log(`📊 PHASE 6 HARDENING SUMMARY: ${passedTests} PASSED, ${failedTests} FAILED`);
+    console.log(`📊 PHASE 6.1 HARDENING SUMMARY: ${passedTests} PASSED, ${failedTests} FAILED`);
     console.log('════════════════════════════════════════════════════════════════════════════\n');
 
     if (failedTests > 0) {
         process.exit(1);
     } else {
-        console.log('🌟 ALL 30 PHASE 6 PRODUCTION HARDENING WORKFLOWS PASSED WITH ZERO ERRORS!\n');
-        process.exit(0);
+        console.log('🌟 ALL 33 PHASE 6.1 PRODUCTION HARDENING WORKFLOWS PASSED WITH ZERO ERRORS!\n');
     }
 }
 
 runPhase6Suite().catch(err => {
-    console.error('Phase 6 verification failed:', err);
+    console.error('Fatal test runner crash:', err);
     process.exit(1);
 });

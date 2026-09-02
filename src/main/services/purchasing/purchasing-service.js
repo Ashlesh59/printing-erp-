@@ -502,6 +502,10 @@ const PurchasingService = {
         return tx();
     },
 
+    receiveGoods: function(data, session) {
+        return this.receivePurchaseOrderItems(data, session);
+    },
+
     getGoodsReceipts: (poId = null) => {
         let query = `
             SELECT gr.*, po.po_number, s.name as supplier_name, l.name as location_name

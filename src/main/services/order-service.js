@@ -264,8 +264,8 @@ class OrderService {
                 INSERT INTO orders (
                     submission_id, customer_id, customer_name_snapshot, customer_phone_snapshot,
                     customer_gstin_snapshot, total_price, subtotal, taxable_amount, gst_amount,
-                    discount_amount, paid_amount, status, payment_status, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    discount_amount, paid_amount, status, payment_status, notes, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `);
 
             const resOrder = stmtOrder.run(
@@ -282,7 +282,8 @@ class OrderService {
                 recordedPaidAmount,
                 initialOrderStatus,
                 paymentStatus,
-                payload.notes || null
+                payload.notes || null,
+                payload.source || 'Manual'
             );
             committedOrderId = resOrder.lastInsertRowid;
 
@@ -537,11 +538,32 @@ class OrderService {
 
     /**
      * Cancels an existing order safely (Does NOT fake refund without explicit refund entry)
-     * @param {Object} sender 
-     * @param {number} orderId 
-     * @param {string} reason 
+     * @param {Object} senderOrPayload 
+     * @param {number|Object} orderIdOrPayload 
+     * @param {string} reasonArg 
      */
-    static cancelOrder(sender, orderId, reason = 'User requested cancellation') {
+    static cancelOrder(senderOrPayload, orderIdOrPayload, reasonArg = 'User requested cancellation') {
+        let orderId, reason, sender;
+
+        if (senderOrPayload && (senderOrPayload.user || senderOrPayload.role)) {
+            sender = senderOrPayload;
+            if (typeof orderIdOrPayload === 'object' && orderIdOrPayload !== null) {
+                orderId = parseInt(orderIdOrPayload.orderId || orderIdOrPayload.id, 10);
+                reason = orderIdOrPayload.reason || reasonArg;
+            } else {
+                orderId = parseInt(orderIdOrPayload, 10);
+                reason = reasonArg;
+            }
+        } else if (typeof senderOrPayload === 'object' && senderOrPayload !== null) {
+            orderId = parseInt(senderOrPayload.orderId || senderOrPayload.id, 10);
+            reason = senderOrPayload.reason || reasonArg;
+            sender = orderIdOrPayload || { role: 'Operator' };
+        } else {
+            orderId = parseInt(senderOrPayload, 10);
+            reason = reasonArg;
+            sender = { role: 'Operator' };
+        }
+
         const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
         if (!order) {
             return { success: false, error: 'Order not found', code: 'NOT_FOUND' };
@@ -590,8 +612,8 @@ class OrderService {
             // Release inventory reservation if active
             try {
                 const ReservationService = require('../database/services/reservation-service');
-                if (ReservationService && typeof ReservationService.cancel === 'function') {
-                    ReservationService.cancel(orderId, sender?.role || 'Operator', 'Order Cancellation');
+                if (ReservationService && typeof ReservationService.release === 'function') {
+                    ReservationService.release(orderId, sender?.role || 'Operator', 'Order Cancellation');
                 }
             } catch (e) {}
 
@@ -612,29 +634,40 @@ class OrderService {
     /**
      * Records an explicit refund for a cancelled or adjusted order
      */
-    static recordRefund(sender, payloadOrId = {}, amountArg = null, reasonArg = null) {
-        let orderId, refundAmount, reason, method;
-        if (typeof payloadOrId === 'object' && payloadOrId !== null) {
-            orderId = parseInt(payloadOrId.orderId, 10);
-            refundAmount = Math.max(0, parseFloat(payloadOrId.amount) || 0);
-            reason = payloadOrId.reason || 'Customer refund';
-            method = payloadOrId.paymentMethod || 'Cash';
-        } else {
-            orderId = parseInt(payloadOrId, 10);
-            refundAmount = Math.max(0, parseFloat(amountArg) || 0);
-            reason = reasonArg || 'Customer refund';
-            method = 'Cash';
-        }
+    static recordRefund(senderOrPayload, payloadOrId = {}, amountArg = null, reasonArg = null) {
+        let orderId, refundAmount, reason, method, sender;
 
-        if (isNaN(orderId) || refundAmount <= 0) {
-            return { success: false, error: 'Valid order ID and positive refund amount are required.', code: 'INVALID_INPUT' };
+        if (senderOrPayload && (senderOrPayload.user || senderOrPayload.role)) {
+            sender = senderOrPayload;
+            if (typeof payloadOrId === 'object' && payloadOrId !== null) {
+                orderId = parseInt(payloadOrId.orderId || payloadOrId.id, 10);
+                refundAmount = Math.max(0, parseFloat(payloadOrId.amount || payloadOrId.refundAmount) || 0);
+                reason = payloadOrId.reason || 'Customer refund';
+                method = payloadOrId.paymentMethod || payloadOrId.refundMethod || 'Cash';
+            } else {
+                orderId = parseInt(payloadOrId, 10);
+                refundAmount = Math.max(0, parseFloat(amountArg) || 0);
+                reason = reasonArg || 'Customer refund';
+                method = 'Cash';
+            }
+        } else if (typeof senderOrPayload === 'object' && senderOrPayload !== null) {
+            orderId = parseInt(senderOrPayload.orderId || senderOrPayload.id, 10);
+            refundAmount = Math.max(0, parseFloat(senderOrPayload.amount || senderOrPayload.refundAmount) || 0);
+            reason = senderOrPayload.reason || 'Customer refund';
+            method = senderOrPayload.paymentMethod || senderOrPayload.refundMethod || 'Cash';
+            sender = payloadOrId || { role: 'Operator' };
         }
 
         const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
         if (!order) return { success: false, error: 'Order not found', code: 'NOT_FOUND' };
 
         const currentPaid = parseFloat(order.paid_amount) || 0;
-        if (refundAmount > currentPaid) {
+        if (refundAmount <= 0) {
+            // Default to full refund if amount not explicitly specified
+            refundAmount = currentPaid;
+        }
+
+        if (refundAmount > currentPaid && currentPaid > 0) {
             return {
                 success: false,
                 error: `Refund amount (₹${refundAmount.toFixed(2)}) cannot exceed collected payment (₹${currentPaid.toFixed(2)}).`,
@@ -650,8 +683,8 @@ class OrderService {
             // Insert refund record into payments ledger (negative entry)
             db.prepare(`
                 INSERT INTO payments (order_id, invoice_id, amount, payment_method, reference_number, status, recorded_by)
-                VALUES (?, (SELECT id FROM gst_invoices WHERE order_id = ?), ?, ?, ?, 'Refunded', ?)
-            `).run(orderId, orderId, -refundAmount, method, reason, recordedBy);
+                VALUES (?, (SELECT id FROM gst_invoices WHERE order_id = ? LIMIT 1), ?, ?, ?, 'Completed', ?)
+            `).run(orderId, orderId, -refundAmount, method, `Refund: ${reason}`, recordedBy);
 
             // Update order paid_amount and payment_status
             db.prepare(`
@@ -669,16 +702,23 @@ class OrderService {
 
             // Log activity
             try {
-                db.prepare('INSERT INTO activities (description, type) VALUES (?, ?)').run(`Refund of ₹${refundAmount} recorded for Order #${orderId}: ${reason}`, 'order_refunded');
+                db.prepare('INSERT INTO activities (description, type) VALUES (?, ?)').run(`Refund of ₹${refundAmount.toFixed(2)} recorded for Order #${orderId}: ${reason}`, 'order_refund');
             } catch (e) {}
         });
 
         try {
             tx();
-            return { success: true, orderId, refundAmount, remainingPaid: newPaid, paymentStatus: newPaymentStatus };
+            return { success: true, orderId, refundAmount, newPaidAmount: newPaid, paymentStatus: newPaymentStatus };
         } catch (err) {
             return { success: false, error: err.message, code: 'DB_ERROR' };
         }
+    }
+
+    /**
+     * Alias for recordRefund
+     */
+    static refundOrder(senderOrPayload, payloadOrId, amountArg, reasonArg) {
+        return this.recordRefund(senderOrPayload, payloadOrId, amountArg, reasonArg);
     }
 
     /**

@@ -143,11 +143,14 @@ function initDatabase() {
             status TEXT DEFAULT 'Confirmed' CHECK (status IN ('Draft', 'Confirmed', 'Scheduled', 'In Production', 'Ready', 'Completed', 'Cancelled', 'Declined', 'Pending', 'Waiting')),
             payment_status TEXT DEFAULT 'Unpaid' CHECK (payment_status IN ('Unpaid', 'Partially Paid', 'Paid', 'Refunded', 'Voided')),
             notes TEXT,
+            source TEXT DEFAULT 'Manual',
             unified_pdf_path TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE SET NULL
         )
     `);
+
+    try { db.exec("ALTER TABLE orders ADD COLUMN source TEXT DEFAULT 'Manual';"); } catch(e){}
 
     // Order Items Table (Discrete files, precise page/sheet quantities, and pricing snapshots)
     db.exec(`

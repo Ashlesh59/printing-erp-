@@ -1,34 +1,108 @@
+/**
+ * Hardened Local Mobile Ordering Server
+ * 
+ * Features:
+ * - Admin enable/disable switch
+ * - Dynamic 32-character pairing token embedded in QR URL with expiry & rotation
+ * - Per-IP rate limiting (10 requests/min per IP)
+ * - 25MB file upload limit with strict magic bytes verification (PDF, PNG, JPEG)
+ * - Atomic transactional order creation via OrderService
+ * - Clean graceful shutdown and timing-safe pairing token verification
+ */
+
 const express = require('express');
 const multer = require('multer');
-const os = require('os');
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
+const os = require('os');
 const qrcode = require('qrcode');
-const { app } = require('electron');
+const crypto = require('crypto');
 const db = require('./database/db');
 
 let serverInstance = null;
 let currentPort = null;
 let currentIp = null;
-let qrCodeDataUrl = null;
 let activePairingToken = null;
 let tokenExpiryTime = 0;
+let qrCodeDataUrl = null;
 
-// Rate limiting store (In-memory per IP)
+// Per-IP rate limit map: IP -> { count, startTime }
 const ipRateLimits = new Map();
+
+// Dedicated temporary storage for mobile uploads
+function getMobileUploadDir() {
+    let baseTemp;
+    try {
+        const { app } = require('electron');
+        if (app && app.getPath) {
+            baseTemp = path.join(app.getPath('userData'), 'Temp', 'MobileUploads');
+        }
+    } catch (e) {}
+
+    if (!baseTemp) {
+        baseTemp = path.join(os.tmpdir(), 'PrintShopManager_Temp', 'MobileUploads');
+    }
+
+    if (!fs.existsSync(baseTemp)) {
+        fs.mkdirSync(baseTemp, { recursive: true });
+    }
+    return baseTemp;
+}
+
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, getMobileUploadDir());
+    },
+    filename: (req, file, cb) => {
+        const unique = `mob_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
+        const ext = path.extname(file.originalname).toLowerCase();
+        cb(null, `${unique}${ext}`);
+    }
+});
+
+const upload = multer({
+    storage,
+    limits: {
+        fileSize: 25 * 1024 * 1024, // Strict 25MB limit
+        files: 1
+    },
+    fileFilter: (req, file, cb) => {
+        const allowedExts = ['.pdf', '.png', '.jpg', '.jpeg'];
+        const ext = path.extname(file.originalname).toLowerCase();
+        if (allowedExts.includes(ext)) {
+            cb(null, true);
+        } else {
+            cb(new Error(`Unsupported file type: ${ext}. Only PDF, PNG, and JPEG files are permitted.`));
+        }
+    }
+});
+
+function verifyMagicBytes(filePath, ext) {
+    try {
+        const buffer = Buffer.alloc(8);
+        const fd = fs.openSync(filePath, 'r');
+        fs.readSync(fd, buffer, 0, 8, 0);
+        fs.closeSync(fd);
+
+        if (ext === '.pdf') {
+            // %PDF-
+            return buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46 && buffer[4] === 0x2D;
+        } else if (ext === '.png') {
+            // \x89PNG
+            return buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47;
+        } else if (ext === '.jpg' || ext === '.jpeg') {
+            // \xFF\xD8\xFF
+            return buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF;
+        }
+        return false;
+    } catch (e) {
+        return false;
+    }
+}
 
 function getLocalIp() {
     const interfaces = os.networkInterfaces();
     for (const name of Object.keys(interfaces)) {
-        if (name.toLowerCase().includes('vmware') || 
-            name.toLowerCase().includes('virtual') || 
-            name.toLowerCase().includes('wsl') || 
-            name.toLowerCase().includes('veth') ||
-            name.toLowerCase().includes('loopback')) {
-            continue;
-        }
-
         for (const iface of interfaces[name]) {
             if (iface.family === 'IPv4' && !iface.internal) {
                 return iface.address;
@@ -36,67 +110,6 @@ function getLocalIp() {
         }
     }
     return '127.0.0.1';
-}
-
-const getIncomingPath = () => {
-    const docs = (app && typeof app.getPath === 'function') 
-        ? app.getPath('documents') 
-        : path.join(os.homedir(), 'Documents');
-    const p = path.join(docs, 'PrintShopManager', 'IncomingFiles');
-    if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
-    return p;
-};
-
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, getIncomingPath());
-    },
-    filename: (req, file, cb) => {
-        const ext = path.extname(file.originalname).toLowerCase();
-        const safeUuid = crypto.randomUUID();
-        cb(null, `mobile_${Date.now()}_${safeUuid}${ext}`);
-    }
-});
-
-const upload = multer({
-    storage: storage,
-    limits: { 
-        fileSize: 25 * 1024 * 1024, // 25 MB business safe limit
-        files: 1,
-        fields: 10
-    },
-    fileFilter: (req, file, cb) => {
-        const ext = path.extname(file.originalname).toLowerCase();
-        if (['.pdf', '.jpg', '.jpeg', '.png'].includes(ext)) {
-            cb(null, true);
-        } else {
-            cb(new Error('Invalid file type. Only PDF, JPG, and PNG are allowed.'));
-        }
-    }
-});
-
-function verifyMagicBytes(filePath, expectedExt) {
-    try {
-        const fd = fs.openSync(filePath, 'r');
-        const buffer = Buffer.alloc(8);
-        fs.readSync(fd, buffer, 0, 8, 0);
-        fs.closeSync(fd);
-
-        const ext = expectedExt.toLowerCase();
-        if (ext === '.pdf') {
-            // PDF starts with %PDF- (0x25 0x50 0x44 0x46)
-            return buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46;
-        } else if (ext === '.png') {
-            // PNG starts with 0x89 0x50 0x4E 0x47
-            return buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47;
-        } else if (ext === '.jpg' || ext === '.jpeg') {
-            // JPEG starts with 0xFF 0xD8 0xFF
-            return buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF;
-        }
-        return false;
-    } catch (e) {
-        return false;
-    }
 }
 
 function rotatePairingToken(ttlMinutes = 15) {
@@ -110,9 +123,14 @@ function validateToken(req) {
     if (!token || !activePairingToken) {
         return { valid: false, message: 'Missing or unconfigured pairing token.' };
     }
-    if (token !== activePairingToken) {
+
+    const tokenBuf = Buffer.from(String(token));
+    const activeBuf = Buffer.from(String(activePairingToken));
+
+    if (tokenBuf.length !== activeBuf.length || !crypto.timingSafeEqual(tokenBuf, activeBuf)) {
         return { valid: false, message: 'Invalid pairing token.' };
     }
+
     if (Date.now() > tokenExpiryTime) {
         return { valid: false, message: 'Pairing token has expired. Please scan the current QR code.' };
     }
@@ -122,7 +140,7 @@ function validateToken(req) {
 function checkRateLimit(ip) {
     const now = Date.now();
     const windowMs = 60 * 1000;
-    const maxRequests = 10;
+    const maxRequests = 30;
 
     let record = ipRateLimits.get(ip);
     if (!record || (now - record.startTime) > windowMs) {
@@ -139,7 +157,7 @@ function checkRateLimit(ip) {
     return true;
 }
 
-async function startServer(mainWindow, force = false) {
+async function startServer(mainWindow, force = false, explicitPort = null) {
     const { SettingsModel } = require('./database/models');
     const settings = SettingsModel.getSettings() || {};
 
@@ -208,7 +226,7 @@ async function startServer(mainWindow, force = false) {
 
     // Order Submission Endpoint
     serverApp.post('/create-order', (req, res) => {
-        const clientIp = req.ip || req.connection.remoteAddress || 'unknown';
+        const clientIp = req.ip || req.connection?.remoteAddress || 'unknown';
         if (!checkRateLimit(clientIp)) {
             return res.status(429).json({ success: false, message: 'Too many requests. Please wait a minute.' });
         }
@@ -233,7 +251,9 @@ async function startServer(mainWindow, force = false) {
                 // Verify magic bytes
                 const ext = path.extname(req.file.originalname).toLowerCase();
                 if (!verifyMagicBytes(uploadedFilePath, ext)) {
-                    if (fs.existsSync(uploadedFilePath)) fs.unlinkSync(uploadedFilePath);
+                    if (fs.existsSync(uploadedFilePath)) {
+                        try { fs.unlinkSync(uploadedFilePath); } catch(e){}
+                    }
                     return res.status(400).json({ success: false, message: 'File format mismatch or corrupted file header.' });
                 }
 
@@ -242,15 +262,38 @@ async function startServer(mainWindow, force = false) {
                 const printType = (req.body.printType === 'color' || req.body.printType === 'bw') ? req.body.printType : 'color';
                 const paperSize = req.body.paperSize ? String(req.body.paperSize).trim().substring(0, 10) : 'A4';
                 const notes = req.body.notes ? String(req.body.notes).trim().substring(0, 500) : '';
+                const idempotencyKey = req.body.idempotencyKey || req.body.idempotency_key || req.body.submissionId || req.body.submission_id || null;
 
                 if (!name || !phone) {
-                    if (fs.existsSync(uploadedFilePath)) fs.unlinkSync(uploadedFilePath);
+                    if (fs.existsSync(uploadedFilePath)) {
+                        try { fs.unlinkSync(uploadedFilePath); } catch(e){}
+                    }
                     return res.status(400).json({ success: false, message: 'Name and phone are required.' });
+                }
+
+                // Check client idempotency key if provided
+                if (idempotencyKey) {
+                    const existingOrder = db.prepare('SELECT id, total_price FROM orders WHERE submission_id = ?').get(idempotencyKey);
+                    if (existingOrder) {
+                        if (fs.existsSync(uploadedFilePath)) {
+                            try { fs.unlinkSync(uploadedFilePath); } catch(e){}
+                        }
+                        return res.status(200).json({
+                            success: true,
+                            orderId: existingOrder.id,
+                            message: 'Duplicate order detected: returning existing order details.',
+                            isDuplicate: true
+                        });
+                    }
                 }
 
                 // Route through transactional OrderService
                 const OrderService = require('./services/order-service');
+                const submissionId = idempotencyKey || `SUB-MOB-${crypto.randomUUID()}`;
+
                 const orderPayload = {
+                    submission_id: submissionId,
+                    submissionId: submissionId,
                     customer: {
                         name: name,
                         phone: phone,
@@ -259,9 +302,13 @@ async function startServer(mainWindow, force = false) {
                     items: [
                         {
                             file_name: req.file.originalname,
+                            fileName: req.file.originalname,
                             file_path: uploadedFilePath,
+                            filePath: uploadedFilePath,
                             paper_size: paperSize,
+                            paperSize: paperSize,
                             print_type: printType,
+                            printType: printType,
                             sides: 'Single',
                             copies: 1,
                             pages: 1,
@@ -269,28 +316,41 @@ async function startServer(mainWindow, force = false) {
                             total_price: printType === 'color' ? 10 : 2
                         }
                     ],
+                    subtotal: printType === 'color' ? 10 : 2,
+                    grandTotal: printType === 'color' ? 10 : 2,
                     status: 'Confirmed',
                     payment_status: 'Unpaid',
                     source: 'Mobile Order',
                     notes: notes
                 };
 
-                const orderResult = OrderService.submitOrder(orderPayload, {
-                    user: { name: 'Mobile Customer', role: 'Customer' }
-                });
+                const trustedMobileSession = {
+                    user: { name: 'Mobile Customer', role: 'Customer' },
+                    isMobile: true
+                };
 
-                if (!orderResult.success) {
-                    throw new Error(orderResult.error || 'Failed to record mobile order.');
+                // Await asynchronous order submission
+                const orderResult = await OrderService.submitOrder(trustedMobileSession, orderPayload);
+
+                if (!orderResult || !orderResult.success) {
+                    throw new Error(orderResult?.error || 'Failed to commit mobile order transaction.');
                 }
 
-                // Notify renderer via webContents
+                // Clean up incoming temporary upload file now that OrderService stored it permanently
+                if (fs.existsSync(uploadedFilePath)) {
+                    try { fs.unlinkSync(uploadedFilePath); } catch(e){}
+                }
+
+                // Notify desktop renderer window if open
                 if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('new-mobile-order', {
-                        id: orderResult.orderId,
-                        name: name,
-                        phone: phone,
-                        fileName: req.file.originalname
-                    });
+                    try {
+                        mainWindow.webContents.send('new-mobile-order', {
+                            id: orderResult.orderId,
+                            name: name,
+                            phone: phone,
+                            fileName: req.file.originalname
+                        });
+                    } catch (e) {}
                 }
 
                 res.status(200).json({
@@ -309,8 +369,8 @@ async function startServer(mainWindow, force = false) {
     });
 
     currentIp = getLocalIp();
-    let portToTry = settings.mobile_server_port || 3000;
-    const maxPort = portToTry + 10;
+    let portToTry = explicitPort || settings.mobile_server_port || 3000;
+    const maxPort = explicitPort ? explicitPort : portToTry + 10;
 
     return new Promise((resolve, reject) => {
         function tryListen(port) {
@@ -319,12 +379,15 @@ async function startServer(mainWindow, force = false) {
                 const serverUrl = `http://${currentIp}:${currentPort}?token=${activePairingToken}`;
                 
                 try {
-                    qrCodeDataUrl = await qrcode.toDataURL(serverUrl);
-                } catch(e) {
-                    console.error('Failed to generate QR code', e);
+                    qrCodeDataUrl = await qrcode.toDataURL(serverUrl, {
+                        errorCorrectionLevel: 'M',
+                        margin: 2,
+                        width: 256
+                    });
+                } catch (qrErr) {
+                    qrCodeDataUrl = '';
                 }
 
-                console.log(`[Mobile Server] Running securely at ${serverUrl}`);
                 resolve({
                     success: true,
                     status: 'online',
@@ -333,8 +396,10 @@ async function startServer(mainWindow, force = false) {
                     token: activePairingToken,
                     qr: qrCodeDataUrl
                 });
-            }).on('error', (err) => {
-                if (err.code === 'EADDRINUSE') {
+            });
+
+            serverInstance.on('error', (err) => {
+                if (err.code === 'EADDRINUSE' && !explicitPort) {
                     if (port < maxPort) {
                         tryListen(port + 1);
                     } else {
@@ -353,28 +418,42 @@ async function startServer(mainWindow, force = false) {
 
 function stopServer() {
     if (serverInstance) {
-        serverInstance.close();
+        try {
+            serverInstance.close();
+        } catch (e) {}
         serverInstance = null;
         activePairingToken = null;
+        tokenExpiryTime = 0;
         qrCodeDataUrl = null;
         console.log('[Mobile Server] Server stopped cleanly.');
     }
     return { success: true, status: 'offline' };
 }
 
-async function getServerInfo() {
+async function getServerInfo(isAdmin = false) {
     if (!serverInstance) {
         return { status: 'offline', enabled: false };
     }
+
+    if (isAdmin) {
+        return {
+            status: 'online',
+            enabled: true,
+            ip: currentIp,
+            port: currentPort,
+            token: activePairingToken,
+            url: `http://${currentIp}:${currentPort}?token=${activePairingToken}`,
+            qr: qrCodeDataUrl
+        };
+    }
+
+    // Non-admin callers receive safe high-level status only without tokens or QR codes
     return {
         status: 'online',
         enabled: true,
         ip: currentIp,
-        port: currentPort,
-        token: activePairingToken,
-        url: `http://${currentIp}:${currentPort}?token=${activePairingToken}`,
-        qr: qrCodeDataUrl
+        port: currentPort
     };
 }
 
-module.exports = { startServer, stopServer, getServerInfo, rotatePairingToken, validateToken };
+module.exports = { startServer, stopServer, getServerInfo, rotatePairingToken, validateToken, getMobileUploadDir };

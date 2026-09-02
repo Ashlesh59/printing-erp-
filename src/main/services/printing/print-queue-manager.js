@@ -1,81 +1,70 @@
 /**
- * Persistent SQLite Print Queue & Concurrency Manager
+ * Single Authoritative Persistent Print Queue Manager
  * 
  * Guarantees:
- * - Persistent storage surviving application restarts
- * - Parallel printing across distinct physical devices
- * - Strictly ONE active job at a time per physical printer
- * - Atomic database claiming to prevent duplicate execution
- * - Truthful crash recovery: interrupted Submitting jobs become 'Uncertain'
+ * - SQLite-backed persistent queue state machine (Queued -> Preparing -> Rendering -> Submitting -> Submitted)
+ * - True multi-printer concurrent execution across distinct physical devices
+ * - Per-printer single-flight mutex serialization
+ * - Crash/timeout resilience (Submitting -> Uncertain)
+ * - Dependency injection of SpoolerAdapter for deterministic testability
+ * - Safe temporary file cleanup strictly bounded to dedicated app temp directory
  */
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 const db = require('../../database/db');
-const eventBus = require('../../events/EventBus');
-const { EventTypes } = require('../../events/EventTypes');
+const { ProductionSpoolerAdapter } = require('./spooler-adapter');
+
+let defaultSpoolerAdapter = new ProductionSpoolerAdapter();
+let activeSpoolerAdapter = defaultSpoolerAdapter;
 
 class PrintQueueManager {
-    static activePrinters = new Set(); // Device names currently processing a job
+    static activePrinters = new Set(); // Normalized deviceName strings currently in-flight
+    static activeWorkers = new Map();  // deviceName -> Promise<void>
 
     /**
-     * Recovers stale or interrupted jobs upon application startup
+     * Dependency Injection for Spooler Adapter (Testing)
      */
-    static recoverStaleJobsOnStartup() {
-        console.log('[PrintQueueManager] Running startup queue recovery...');
-        let recovered = 0;
-        let markedUncertain = 0;
+    static setSpoolerAdapter(adapter) {
+        activeSpoolerAdapter = adapter;
+    }
 
-        const tx = db.transaction(() => {
-            // 1. Interrupted during submission -> must become Uncertain to prevent double-printing
-            const resUncertain = db.prepare(`
-                UPDATE print_jobs 
-                SET status = 'Uncertain', locked_by = NULL, locked_at = NULL,
-                    error_message = 'Interrupted during spooler submission (App restart / power loss)'
-                WHERE status = 'Submitting'
-            `).run();
-            markedUncertain = resUncertain.changes;
+    static resetSpoolerAdapter() {
+        activeSpoolerAdapter = defaultSpoolerAdapter;
+    }
 
-            // 2. Interrupted before submission (Preparing / Rendering) -> safe to re-queue
-            const resRequeue = db.prepare(`
-                UPDATE print_jobs 
-                SET status = 'Queued', locked_by = NULL, locked_at = NULL
-                WHERE status IN ('Preparing', 'Rendering')
-            `).run();
-            recovered = resRequeue.changes;
-        });
+    static getSpoolerAdapter() {
+        return activeSpoolerAdapter;
+    }
 
+    /**
+     * Helper to get dedicated application temp directory
+     */
+    static getAppTempDir() {
+        let appTemp;
         try {
-            tx();
-            console.log(`[PrintQueueManager] Queue recovery complete. Re-queued: ${recovered}, Marked Uncertain: ${markedUncertain}`);
-        } catch (e) {
-            console.error('[PrintQueueManager] Startup recovery error:', e.message);
+            const { app } = require('electron');
+            if (app && app.getPath) {
+                appTemp = path.join(app.getPath('userData'), 'Temp');
+            }
+        } catch (e) {}
+
+        if (!appTemp) {
+            appTemp = path.join(os.tmpdir(), 'PrintShopManager_Temp');
         }
 
-        return { recovered, markedUncertain };
-    }
-
-    static acquirePrinterLock(printerDeviceName, workerId = 'worker') {
-        const device = (printerDeviceName || 'default').toLowerCase();
-        if (this.activePrinters.has(device)) return false;
-        this.activePrinters.add(device);
-        return true;
-    }
-
-    static releasePrinterLock(printerDeviceName) {
-        const device = (printerDeviceName || 'default').toLowerCase();
-        this.activePrinters.delete(device);
-        return true;
-    }
-
-    static recoverInterruptedJobs() {
-        const res = this.recoverStaleJobsOnStartup();
-        return { requeuedCount: res.recovered, uncertainCount: res.markedUncertain };
+        if (!fs.existsSync(appTemp)) {
+            try { fs.mkdirSync(appTemp, { recursive: true }); } catch (e) {}
+        }
+        return appTemp;
     }
 
     /**
-     * Enqueues a new print job into persistent storage
+     * Enqueues a new print job into the SQLite persistent queue
      * @param {Object} jobParams
-     * @returns {Object} Created print_jobs record
+     * @returns {Object} Newly inserted print_jobs row
      */
     static enqueue(jobParams = {}) {
         const orderId = jobParams.orderId || jobParams.order_id || null;
@@ -91,6 +80,7 @@ class PrintQueueManager {
         const scalingMode = jobParams.scalingMode || 'fit';
         const settingsSnapshot = jobParams.settingsSnapshot ? JSON.stringify(jobParams.settingsSnapshot) : null;
         const preflightChecksum = jobParams.preflightChecksum || null;
+        const isTempFile = jobParams.isTempFile ? 1 : 0;
 
         const stmt = db.prepare(`
             INSERT INTO print_jobs (
@@ -107,31 +97,43 @@ class PrintQueueManager {
         );
 
         const newJob = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(res.lastInsertRowid);
+        newJob.is_temp_file = isTempFile;
         return newJob;
     }
 
     /**
-     * Atomically claims the next Queued job for a printer that is not currently busy
+     * Atomically claims the next Queued job for a specific printer or any available free printer
      * @param {string} workerId 
+     * @param {string|null} targetPrinterDevice 
      * @returns {Object|null} Claimed print_jobs row
      */
-    static claimNextJob(workerId = `worker_${crypto.randomUUID().substring(0, 8)}`) {
+    static claimNextJob(workerId = `worker_${crypto.randomUUID().substring(0, 8)}`, targetPrinterDevice = null) {
         let claimedJob = null;
 
         const tx = db.transaction(() => {
-            // Find oldest Queued job
-            const candidateJobs = db.prepare(`
-                SELECT * FROM print_jobs 
-                WHERE status = 'Queued' AND locked_by IS NULL
-                ORDER BY id ASC
-                LIMIT 10
-            `).all();
+            let candidateJobs;
+            if (targetPrinterDevice) {
+                candidateJobs = db.prepare(`
+                    SELECT * FROM print_jobs 
+                    WHERE status = 'Queued' AND locked_by IS NULL 
+                      AND (LOWER(printer_device_name) = ? OR LOWER(printer_name) = ?)
+                    ORDER BY id ASC
+                    LIMIT 5
+                `).all(targetPrinterDevice.toLowerCase(), targetPrinterDevice.toLowerCase());
+            } else {
+                candidateJobs = db.prepare(`
+                    SELECT * FROM print_jobs 
+                    WHERE status = 'Queued' AND locked_by IS NULL
+                    ORDER BY id ASC
+                    LIMIT 20
+                `).all();
+            }
 
             for (const candidate of candidateJobs) {
                 const targetDevice = (candidate.printer_device_name || candidate.printer_name || 'Default').toLowerCase();
-                // Check if this printer is currently locked in memory or database
+                
+                // Ensure this physical printer is not already busy
                 if (!this.activePrinters.has(targetDevice)) {
-                    // Try to claim
                     const claimRes = db.prepare(`
                         UPDATE print_jobs 
                         SET status = 'Preparing', locked_by = ?, locked_at = CURRENT_TIMESTAMP
@@ -157,7 +159,22 @@ class PrintQueueManager {
     }
 
     /**
-     * Releases printer lock and transitions print job to final state
+     * Updates intermediate job status in database (Preparing -> Rendering -> Submitting)
+     */
+    static updateJobStatus(jobId, newStatus) {
+        try {
+            db.prepare(`
+                UPDATE print_jobs
+                SET status = ?
+                WHERE id = ?
+            `).run(newStatus, jobId);
+        } catch (e) {
+            console.error(`[PrintQueueManager] Failed to update job #${jobId} status to ${newStatus}:`, e.message);
+        }
+    }
+
+    /**
+     * Releases printer lock and transitions print job to its final terminal state
      */
     static releaseJob(jobId, finalStatus, errorMessage = null, attemptHistory = null) {
         const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(jobId);
@@ -167,7 +184,6 @@ class PrintQueueManager {
         this.activePrinters.delete(targetDevice);
 
         const isSuccess = finalStatus === 'Submitted' || finalStatus === 'Confirmed Printed';
-        const isInterrupted = finalStatus === 'Uncertain';
 
         try {
             db.prepare(`
@@ -180,7 +196,13 @@ class PrintQueueManager {
                     submitted_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE submitted_at END,
                     finished_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-            `).run(finalStatus, errorMessage || null, attemptHistory ? JSON.stringify(attemptHistory) : null, isSuccess ? 1 : 0, jobId);
+            `).run(
+                finalStatus,
+                errorMessage || null,
+                attemptHistory ? JSON.stringify(attemptHistory) : null,
+                isSuccess ? 1 : 0,
+                jobId
+            );
         } catch (e) {
             console.error(`[PrintQueueManager] Error releasing job #${jobId}:`, e.message);
         }
@@ -286,56 +308,214 @@ class PrintQueueManager {
 
     /**
      * Deletes temporary generated PDFs safely, strictly protecting permanent order storage
+     * Only deletes files residing inside the dedicated application temp directory
      */
     static cleanupJobTempFile(filePath) {
         if (!filePath || typeof filePath !== 'string') return;
-        const os = require('os');
-        const fs = require('fs');
-        const path = require('path');
-        const tmp = os.tmpdir();
-        // Only delete if located inside system/app temp directory
-        if (filePath.startsWith(tmp) || filePath.includes('unified_print_') || filePath.includes('diagnostic_test_page_')) {
-            try {
-                if (fs.existsSync(filePath)) {
-                    fs.unlinkSync(filePath);
-                }
-            } catch(e) {}
+        
+        try {
+            const appTempDir = this.getAppTempDir();
+            const realTempDir = fs.existsSync(appTempDir) ? fs.realpathSync(appTempDir) : path.normalize(appTempDir);
+            
+            if (!fs.existsSync(filePath)) return;
+            const realFile = fs.realpathSync(filePath);
+
+            // Verify canonical path resides strictly inside application temp directory
+            const rel = path.relative(realTempDir, realFile);
+            const isInsideAppTemp = !rel.startsWith('..') && !path.isAbsolute(rel);
+
+            if (isInsideAppTemp) {
+                fs.unlinkSync(realFile);
+            }
+        } catch (e) {
+            // Silently ignore cleanup errors to prevent process aborts
         }
     }
 
     /**
-     * Processes next available queued jobs for free printers
+     * Processes a single claimed print job through the full OS spooler pipeline
+     * @param {Object} initialJob - Claimed print_jobs row
+     */
+    static async processJob(initialJob) {
+        const jobId = initialJob.id;
+        const targetDevice = (initialJob.printer_device_name || initialJob.printer_name || 'Default').toLowerCase();
+
+        try {
+            // 1. Preparing -> Rendering
+            this.updateJobStatus(jobId, 'Rendering');
+
+            // Parse settings snapshot if present
+            let settingsSnapshot = {};
+            if (initialJob.settings_snapshot_json) {
+                try {
+                    settingsSnapshot = JSON.parse(initialJob.settings_snapshot_json);
+                } catch (e) {}
+            }
+
+            // Check if Simulator Mode is active in settings
+            let isSimulator = false;
+            try {
+                const settingsRow = db.prepare('SELECT print_simulator_enabled FROM settings WHERE id = 1').get();
+                isSimulator = settingsRow ? (settingsRow.print_simulator_enabled === 1) : false;
+            } catch (e) {}
+
+            if (isSimulator) {
+                // Clearly simulate printing in dedicated simulator directory
+                const simulatorDir = path.join(process.cwd(), 'PrintSimulator');
+                if (!fs.existsSync(simulatorDir)) fs.mkdirSync(simulatorDir, { recursive: true });
+
+                if (initialJob.file_path && fs.existsSync(initialJob.file_path)) {
+                    const dest = path.join(simulatorDir, `simulated_job_${jobId}_${path.basename(initialJob.file_path)}`);
+                    fs.copyFileSync(initialJob.file_path, dest);
+                }
+
+                // Simulate brief spool delay
+                await new Promise(resolve => setTimeout(resolve, 50));
+
+                this.releaseJob(jobId, 'Submitted', null, [{
+                    timestamp: new Date().toISOString(),
+                    mode: 'SIMULATED',
+                    status: 'Submitted'
+                }]);
+                return { success: true, simulated: true };
+            }
+
+            // 2. Rendering -> Submitting
+            this.updateJobStatus(jobId, 'Submitting');
+
+            // 3. Delegate to SpoolerAdapter (OS Spooler or Injected Test Adapter)
+            const adapter = activeSpoolerAdapter || defaultSpoolerAdapter;
+            const result = await adapter.print(initialJob, settingsSnapshot);
+
+            if (result.success) {
+                this.releaseJob(jobId, 'Submitted', null, [result.attemptDetails]);
+                return { success: true };
+            } else if (result.timeout || result.crashed) {
+                // Stalled or crashed during Submitting must transition to Uncertain
+                this.releaseJob(jobId, 'Uncertain', result.failureReason, [result.attemptDetails]);
+                return { success: false, uncertain: true, reason: result.failureReason };
+            } else {
+                this.releaseJob(jobId, 'Failed', result.failureReason, [result.attemptDetails]);
+                return { success: false, reason: result.failureReason };
+            }
+        } catch (err) {
+            console.error(`[PrintQueueManager] Unexpected failure processing job #${jobId}:`, err);
+            this.releaseJob(jobId, 'Failed', err.message);
+            return { success: false, reason: err.message };
+        } finally {
+            this.activePrinters.delete(targetDevice);
+            this.cleanupJobTempFile(initialJob.file_path);
+        }
+    }
+
+    /**
+     * Processes next available queued jobs concurrently across all free physical printers
      */
     static async processQueue() {
-        let job = this.claimNextJob();
-        while (job) {
-            try {
-                const fs = require('fs');
-                const os = require('os');
-                const path = require('path');
-                const settings = db.prepare('SELECT print_simulator_enabled FROM settings WHERE id = 1').get();
-                const isSimulator = settings ? (settings.print_simulator_enabled === 1) : false;
+        const workerPromises = [];
 
-                if (isSimulator) {
-                    const simulatorDir = path.join(process.cwd(), 'PrintSimulator');
-                    if (!fs.existsSync(simulatorDir)) fs.mkdirSync(simulatorDir, { recursive: true });
-                    if (fs.existsSync(job.file_path)) {
-                        const dest = path.join(simulatorDir, `job_${job.id}_${path.basename(job.file_path)}`);
-                        fs.copyFileSync(job.file_path, dest);
-                    }
-                    this.releaseJob(job.id, 'Submitted');
-                    this.cleanupJobTempFile(job.file_path);
-                } else {
-                    // Spooler submission simulation / real spooler
-                    this.releaseJob(job.id, 'Submitted');
-                    this.cleanupJobTempFile(job.file_path);
-                }
-            } catch (err) {
-                this.releaseJob(job.id, 'Failed', err.message);
-                this.cleanupJobTempFile(job.file_path);
+        // Find all distinct devices with queued jobs
+        const queuedDevices = db.prepare(`
+            SELECT DISTINCT COALESCE(printer_device_name, printer_name, 'Default') as device_name
+            FROM print_jobs
+            WHERE status = 'Queued' AND locked_by IS NULL
+        `).all();
+
+        for (const row of queuedDevices) {
+            const deviceName = (row.device_name || 'Default').toLowerCase();
+
+            // If this printer is already actively running a worker, skip to preserve single-flight mutex
+            if (this.activePrinters.has(deviceName)) {
+                continue;
             }
-            job = this.claimNextJob();
+
+            // Claim first job for this device
+            const workerId = `worker_${deviceName}_${crypto.randomUUID().substring(0, 6)}`;
+            const job = this.claimNextJob(workerId, deviceName);
+
+            if (job) {
+                // Launch dedicated async pipeline for this printer
+                const workerPromise = (async () => {
+                    let currentJob = job;
+                    while (currentJob) {
+                        await this.processJob(currentJob);
+                        // Claim next job for THIS physical printer device
+                        currentJob = this.claimNextJob(workerId, deviceName);
+                    }
+                })();
+
+                workerPromises.push(workerPromise);
+            }
         }
+
+        // Await all concurrent printer workers
+        await Promise.allSettled(workerPromises);
+    }
+
+    /**
+     * Startup Crash Recovery: Recovers Preparing jobs to Queued, Submitting jobs to Uncertain
+     */
+    static recoverStaleJobsOnStartup() {
+        let recovered = 0;
+        let markedUncertain = 0;
+
+        try {
+            console.log('[PrintQueueManager] Running startup queue recovery...');
+
+            // 1. Recover Preparing/Rendering jobs back to Queued (safe to retry)
+            const prepRes = db.prepare(`
+                UPDATE print_jobs
+                SET status = 'Queued', locked_by = NULL, locked_at = NULL
+                WHERE status IN ('Preparing', 'Rendering')
+            `).run();
+            recovered = prepRes.changes;
+
+            // 2. Transition Submitting jobs to Uncertain (cannot blindly retry without operator confirmation)
+            const subRes = db.prepare(`
+                UPDATE print_jobs
+                SET status = 'Uncertain', locked_by = NULL, locked_at = NULL,
+                    error_message = 'Interrupted during printer spooler submission. Operator verification required.'
+                WHERE status = 'Submitting'
+            `).run();
+            markedUncertain = subRes.changes;
+
+            // Clear in-memory printer lock sets
+            this.activePrinters.clear();
+            this.activeWorkers.clear();
+
+            console.log(`[PrintQueueManager] Queue recovery complete. Re-queued: ${recovered}, Marked Uncertain: ${markedUncertain}`);
+        } catch (e) {
+            console.error('[PrintQueueManager] Recovery error:', e.message);
+        }
+
+        return { recovered, markedUncertain, requeuedCount: recovered, uncertainCount: markedUncertain };
+    }
+
+    /**
+     * Compatibility alias for startup recovery
+     */
+    static recoverInterruptedJobs() {
+        return this.recoverStaleJobsOnStartup();
+    }
+
+    /**
+     * Acquires per-printer lock for single-flight concurrency
+     */
+    static acquirePrinterLock(printerName, workerId = 'worker') {
+        const device = (printerName || 'Default').trim().toLowerCase();
+        if (this.activePrinters.has(device)) {
+            return false;
+        }
+        this.activePrinters.add(device);
+        return true;
+    }
+
+    /**
+     * Releases per-printer lock
+     */
+    static releasePrinterLock(printerName, workerId = 'worker') {
+        const device = (printerName || 'Default').trim().toLowerCase();
+        this.activePrinters.delete(device);
     }
 
     /**

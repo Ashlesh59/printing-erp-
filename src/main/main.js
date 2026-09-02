@@ -17,7 +17,7 @@ process.on('unhandledRejection', (reason) => {
 
 // Register privileged custom file protocol before app is ready
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'app-file', privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true, stream: true } }
+  { scheme: 'app-file', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
 ]);
 const { initDatabase } = require('./database/schema');
 const { LicenseModel, CustomerModel, OrderModel, SettingsModel, PricingModel, ActivityModel, DeviceModel, UserModel, WorkflowModel, PrintProfileModel, ProductModel, PrintAuditLogModel, WizardModel } = require('./database/models');
@@ -1088,6 +1088,39 @@ function createWindow() {
       const win = BrowserWindow.getFocusedWindow() || mainWindow;
       return win ? win.isFullScreen() : false;
     });
+
+    // ==========================================
+    // MOBILE ORDER SERVER IPC (Guarded Admin / Safe Operator)
+    // ==========================================
+    const { startServer, stopServer, getServerInfo, rotatePairingToken } = require('./server');
+
+    registerGuardedHandler('mobile-server:start', ROLES.ADMIN, async (event, port) => {
+      const win = BrowserWindow.getFocusedWindow() || mainWindow;
+      return await startServer(win, true, port);
+    });
+
+    registerGuardedHandler('mobile-server:stop', ROLES.ADMIN, () => {
+      return stopServer();
+    });
+
+    registerGuardedHandler('mobile-server:rotate-token', ROLES.ADMIN, () => {
+      const token = rotatePairingToken();
+      return { success: true, token };
+    });
+
+    registerGuardedHandler('mobile-server:get-token-and-qr', ROLES.ADMIN, async () => {
+      return await getServerInfo(true);
+    });
+
+    registerGuardedHandler('mobile-server:get-status', ROLES.OPERATOR, async () => {
+      return await getServerInfo(false);
+    });
+
+    registerGuardedHandler('get-server-info', ROLES.OPERATOR, async (event) => {
+      const session = sessionManager.getSession(event.sender);
+      const isAdmin = session && session.role === 'Admin';
+      return await getServerInfo(isAdmin);
+    });
   } // End of if (!global.ipcHandlersRegistered)
 
   // Open DevTools during development
@@ -1136,9 +1169,9 @@ app.whenReady().then(() => {
         return new Response('Access Denied: Directory access not allowed', { status: 403 });
       }
 
-      // Validate file extension against allowed whitelist
+      // Validate file extension against allowed whitelist (reject raw SVG)
       const ext = path.extname(normalizedPath).toLowerCase();
-      const ALLOWED_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.svg', '.webp']);
+      const ALLOWED_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.webp']);
       if (!ALLOWED_EXTENSIONS.has(ext)) {
         return new Response('Access Denied: Unsupported file type', { status: 403 });
       }
@@ -1146,16 +1179,19 @@ app.whenReady().then(() => {
       // Resolve canonical path
       const canonicalPath = fs.realpathSync(normalizedPath);
 
-      // Define approved storage roots
+      // Define approved storage roots strictly (dedicated app temp directory, never broad os.tmpdir())
       const docsPath = (app && typeof app.getPath === 'function') ? app.getPath('documents') : path.join(os.homedir(), 'Documents');
-      const tempPath = os.tmpdir();
+      const appTemp = (app && typeof app.getPath === 'function')
+        ? path.join(app.getPath('userData'), 'Temp')
+        : path.join(os.tmpdir(), 'PrintShopManager_Temp');
+
       const approvedRoots = [
         path.join(docsPath, 'PrintShopManager'),
         path.join(docsPath, 'PrintShop'),
         path.join(os.homedir(), 'Documents', 'PrintShopManager'),
         path.join(os.homedir(), 'Documents', 'PrintShop'),
         'C:\\PrintShopManager',
-        tempPath
+        appTemp
       ].map(r => {
         try {
           return fs.existsSync(r) ? fs.realpathSync(r) : path.normalize(r);

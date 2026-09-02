@@ -458,6 +458,13 @@ async function printFile(payload, printerName, options = {}) {
 
         let job;
         if (options.printJobId) {
+            const existing = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(options.printJobId);
+            if (!existing) {
+                throw new Error(`Print job #${options.printJobId} not found.`);
+            }
+            if (['Submitted', 'Confirmed Printed', 'Cancelled', 'Preparing', 'Rendering', 'Submitting'].includes(existing.status)) {
+                throw new Error(`Cannot re-enqueue print job #${options.printJobId} in state '${existing.status}'. Create a new print job instead.`);
+            }
             db.prepare(`
                 UPDATE print_jobs 
                 SET status = 'Queued', printer_name = ?, file_path = ?, pages = ?, copies = ?, error_message = NULL
@@ -491,11 +498,14 @@ async function printFile(payload, printerName, options = {}) {
     } catch (error) {
         try {
             if (options.printJobId) {
-                db.prepare(`
-                    UPDATE print_jobs 
-                    SET status = 'Failed', error_message = ?, finished_at = CURRENT_TIMESTAMP 
-                    WHERE id = ?
-                `).run(error.message || String(error), options.printJobId);
+                const existing = db.prepare('SELECT status FROM print_jobs WHERE id = ?').get(options.printJobId);
+                if (existing && !['Submitted', 'Confirmed Printed', 'Cancelled'].includes(existing.status)) {
+                    db.prepare(`
+                        UPDATE print_jobs 
+                        SET status = 'Failed', error_message = ?, finished_at = CURRENT_TIMESTAMP 
+                        WHERE id = ?
+                    `).run(error.message || String(error), options.printJobId);
+                }
             } else {
                 const customerId = options.customerId || options.customer_id || null;
                 const paperSize = options.paperSize || options.paper_size || null;
