@@ -821,11 +821,46 @@ function createWindow() {
     registerGuardedHandler('adjust-inv-stock', ROLES.ADMIN, (event, data) => InventoryModel.adjustStock(data));
     registerGuardedHandler('get-inv-transactions', ROLES.OPERATOR, (event, itemId) => InventoryModel.getStockTransactions(itemId));
     
-    registerGuardedHandler('get-inv-purchase-orders', ROLES.OPERATOR, () => InventoryModel.getPurchaseOrders());
+    // ==========================================
+    // PHASE 5 PURCHASING & SUPPLIER HARDENED APIS
+    // ==========================================
+    const PurchasingService = require('./services/purchasing/purchasing-service');
+
+    registerGuardedHandler('get-inv-purchase-orders', ROLES.OPERATOR, (event, filters) => InventoryModel.getPurchaseOrders(filters));
     registerGuardedHandler('get-inv-purchase-order-by-id', ROLES.OPERATOR, (event, id) => InventoryModel.getPurchaseOrderById(id));
     registerGuardedHandler('create-inv-purchase-order', ROLES.ADMIN, (event, data) => InventoryModel.createPurchaseOrder(data));
+    registerGuardedHandler('approve-inv-purchase-order', ROLES.ADMIN, (event, { poId, data }) => InventoryModel.approvePurchaseOrder(poId, data));
+    registerGuardedHandler('mark-inv-purchase-order-ordered', ROLES.OPERATOR, (event, { poId, data }) => InventoryModel.markPurchaseOrderOrdered(poId, data));
     registerGuardedHandler('receive-inv-purchase-order', ROLES.ADMIN, (event, { poId, data }) => InventoryModel.receivePurchaseOrder(poId, data));
     registerGuardedHandler('cancel-inv-purchase-order', ROLES.ADMIN, (event, { poId, data }) => InventoryModel.cancelPurchaseOrder(poId, data));
+    
+    registerGuardedHandler('get-inv-goods-receipts', ROLES.OPERATOR, (event, poId) => InventoryModel.getGoodsReceipts(poId));
+    registerGuardedHandler('get-inv-supplier-bills', ROLES.OPERATOR, (event, supplierId) => InventoryModel.getSupplierBills(supplierId));
+    registerGuardedHandler('create-inv-supplier-bill', ROLES.ADMIN, (event, data) => InventoryModel.postSupplierBill(data));
+    registerGuardedHandler('get-inv-supplier-payments', ROLES.OPERATOR, (event, supplierId) => InventoryModel.getSupplierPayments(supplierId));
+    registerGuardedHandler('record-inv-supplier-payment', ROLES.ADMIN, (event, data) => InventoryModel.recordSupplierPayment(data));
+    registerGuardedHandler('reverse-inv-supplier-payment', ROLES.ADMIN, (event, { paymentId, data }) => InventoryModel.reverseSupplierPayment(paymentId, data));
+    registerGuardedHandler('get-inv-purchase-returns', ROLES.OPERATOR, (event, supplierId) => InventoryModel.getPurchaseReturns(supplierId));
+    registerGuardedHandler('get-inv-supplier-statement', ROLES.OPERATOR, (event, supplierId) => InventoryModel.getSupplierStatement(supplierId));
+    registerGuardedHandler('get-inv-purchasing-integrity-report', ROLES.ADMIN, () => InventoryModel.getPurchasingIntegrityReport());
+    
+    registerGuardedHandler('purchasing:get-orders', ROLES.OPERATOR, (event, filters) => PurchasingService.getPurchaseOrders(filters));
+    registerGuardedHandler('purchasing:get-order', ROLES.OPERATOR, (event, id) => PurchasingService.getPurchaseOrderById(id));
+    registerGuardedHandler('purchasing:create-order', ROLES.ADMIN, (event, data) => PurchasingService.createPurchaseOrder(data, { user: { name: 'Admin', role: 'Admin' } }));
+    registerGuardedHandler('purchasing:approve-order', ROLES.ADMIN, (event, poId) => PurchasingService.approvePurchaseOrder(poId, { user: { name: 'Admin', role: 'Admin' } }));
+    registerGuardedHandler('purchasing:mark-ordered', ROLES.OPERATOR, (event, poId) => PurchasingService.markPurchaseOrderOrdered(poId, { user: { name: 'Operator', role: 'Operator' } }));
+    registerGuardedHandler('purchasing:receive-items', ROLES.ADMIN, (event, data) => PurchasingService.receivePurchaseOrderItems(data, { user: { name: 'Admin', role: 'Admin' } }));
+    registerGuardedHandler('purchasing:get-receipts', ROLES.OPERATOR, (event, poId) => PurchasingService.getGoodsReceipts(poId));
+    registerGuardedHandler('purchasing:get-bills', ROLES.OPERATOR, (event, supplierId) => PurchasingService.getSupplierBills(supplierId));
+    registerGuardedHandler('purchasing:create-bill', ROLES.ADMIN, (event, data) => PurchasingService.postSupplierBill(data, { user: { name: 'Admin', role: 'Admin' } }));
+    registerGuardedHandler('purchasing:get-payments', ROLES.OPERATOR, (event, supplierId) => PurchasingService.getSupplierPayments(supplierId));
+    registerGuardedHandler('purchasing:record-payment', ROLES.ADMIN, (event, data) => PurchasingService.recordSupplierPayment(data, { user: { name: 'Admin', role: 'Admin' } }));
+    registerGuardedHandler('purchasing:reverse-payment', ROLES.ADMIN, (event, { paymentId, reason }) => PurchasingService.reverseSupplierPayment(paymentId, reason, { user: { name: 'Admin', role: 'Admin' } }));
+    registerGuardedHandler('purchasing:get-returns', ROLES.OPERATOR, (event, supplierId) => PurchasingService.getPurchaseReturns(supplierId));
+    registerGuardedHandler('purchasing:create-return', ROLES.ADMIN, (event, data) => PurchasingService.createPurchaseReturn(data, { user: { name: 'Admin', role: 'Admin' } }));
+    registerGuardedHandler('purchasing:cancel-order', ROLES.ADMIN, (event, { poId, reason }) => PurchasingService.cancelPurchaseOrder(poId, reason, { user: { name: 'Admin', role: 'Admin' } }));
+    registerGuardedHandler('purchasing:get-supplier-statement', ROLES.OPERATOR, (event, supplierId) => PurchasingService.getSupplierStatement(supplierId));
+    registerGuardedHandler('purchasing:get-integrity-report', ROLES.ADMIN, () => PurchasingService.getPurchasingIntegrityReport());
     
     registerGuardedHandler('get-inv-alerts', ROLES.OPERATOR, () => InventoryModel.getAlerts());
     registerGuardedHandler('get-inv-settings', ROLES.OPERATOR, () => InventoryModel.getSettings());

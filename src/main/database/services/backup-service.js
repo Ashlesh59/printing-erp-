@@ -524,11 +524,15 @@ function getDatabaseHealth() {
  */
 async function createSafetyBackup(opName) {
     try {
+        const filePath = db.dbPath || (typeof db.name === 'string' && db.name !== ':memory:' ? db.name : null);
+        if (!filePath || !fs.existsSync(filePath)) {
+            return { success: true, skipped: true };
+        }
         db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
         const tempName = `temp_safety_${opName}.db.gz`;
         const tempPath = path.join(folders.temp, tempName);
 
-        const rawBytes = fs.readFileSync(db.dbPath);
+        const rawBytes = fs.readFileSync(filePath);
         const compressed = zlib.gzipSync(rawBytes);
         fs.writeFileSync(tempPath, compressed);
         

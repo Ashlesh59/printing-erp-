@@ -416,7 +416,10 @@ function initDatabase() {
             email TEXT,
             gstin TEXT,
             address TEXT,
+            payment_terms TEXT,
+            opening_balance REAL DEFAULT 0,
             outstanding_balance REAL DEFAULT 0,
+            is_archived INTEGER DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     `);
@@ -477,19 +480,33 @@ function initDatabase() {
             po_number TEXT UNIQUE NOT NULL,
             supplier_id INTEGER NOT NULL,
             order_date DATE NOT NULL,
+            expected_delivery_date DATE,
             received_date DATE,
+            currency TEXT NOT NULL DEFAULT 'INR',
+            location_id INTEGER,
             subtotal REAL NOT NULL DEFAULT 0,
-            gst_amount REAL NOT NULL DEFAULT 0,
+            tax_amount REAL NOT NULL DEFAULT 0,
+            cgst_amount REAL NOT NULL DEFAULT 0,
+            sgst_amount REAL NOT NULL DEFAULT 0,
+            igst_amount REAL NOT NULL DEFAULT 0,
             transport_cost REAL NOT NULL DEFAULT 0,
             discount REAL NOT NULL DEFAULT 0,
             grand_total REAL NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Approved', 'Ordered', 'Partially Received', 'Fully Received', 'Closed', 'Cancelled')),
             payment_status TEXT NOT NULL DEFAULT 'Unpaid' CHECK (payment_status IN ('Unpaid', 'Partially Paid', 'Paid')),
-            status TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending', 'Ordered', 'Received', 'Cancelled')),
             invoice_number TEXT,
             invoice_file_path TEXT,
             notes TEXT,
+            created_by TEXT DEFAULT 'System',
+            approved_by TEXT,
+            approved_at DATETIME,
+            closed_at DATETIME,
+            cancelled_at DATETIME,
+            cancellation_reason TEXT,
+            idempotency_key TEXT UNIQUE,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (supplier_id) REFERENCES suppliers (id)
+            FOREIGN KEY (supplier_id) REFERENCES suppliers (id) ON DELETE RESTRICT,
+            FOREIGN KEY (location_id) REFERENCES inventory_locations (id)
         )
     `);
 
@@ -499,14 +516,185 @@ function initDatabase() {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             po_id INTEGER NOT NULL,
             item_id INTEGER NOT NULL,
-            qty REAL NOT NULL,
-            cost REAL NOT NULL,
-            gst_rate REAL NOT NULL DEFAULT 18,
-            total REAL NOT NULL,
+            supplier_sku TEXT,
+            item_name_snapshot TEXT NOT NULL DEFAULT '',
+            sku_snapshot TEXT NOT NULL DEFAULT '',
+            unit_snapshot TEXT NOT NULL DEFAULT 'Units',
+            ordered_qty REAL NOT NULL CHECK (ordered_qty > 0),
+            received_qty REAL NOT NULL DEFAULT 0 CHECK (received_qty >= 0),
+            returned_qty REAL NOT NULL DEFAULT 0 CHECK (returned_qty >= 0),
+            cancelled_qty REAL NOT NULL DEFAULT 0 CHECK (cancelled_qty >= 0),
+            unit_cost REAL NOT NULL CHECK (unit_cost >= 0),
+            tax_rate REAL NOT NULL DEFAULT 18 CHECK (tax_rate >= 0),
+            tax_amount REAL NOT NULL DEFAULT 0 CHECK (tax_amount >= 0),
+            line_total REAL NOT NULL CHECK (line_total >= 0),
+            target_location_id INTEGER,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (po_id) REFERENCES purchase_orders (id) ON DELETE CASCADE,
-            FOREIGN KEY (item_id) REFERENCES inventory_items (id)
+            FOREIGN KEY (item_id) REFERENCES inventory_items (id) ON DELETE RESTRICT,
+            FOREIGN KEY (target_location_id) REFERENCES inventory_locations (id)
         )
+    `);
+
+    // 6a. Goods Receipts & Items Tables
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS goods_receipts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            receipt_number TEXT UNIQUE NOT NULL,
+            po_id INTEGER NOT NULL,
+            supplier_id INTEGER NOT NULL,
+            receipt_date DATE NOT NULL,
+            location_id INTEGER NOT NULL,
+            supplier_doc_ref TEXT,
+            status TEXT NOT NULL DEFAULT 'Posted' CHECK (status IN ('Draft', 'Posted', 'Reversed')),
+            notes TEXT,
+            created_by TEXT NOT NULL DEFAULT 'System',
+            idempotency_key TEXT UNIQUE,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (po_id) REFERENCES purchase_orders (id) ON DELETE RESTRICT,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers (id) ON DELETE RESTRICT,
+            FOREIGN KEY (location_id) REFERENCES inventory_locations (id) ON DELETE RESTRICT
+        );
+
+        CREATE TABLE IF NOT EXISTS goods_receipt_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            receipt_id INTEGER NOT NULL,
+            po_item_id INTEGER NOT NULL,
+            item_id INTEGER NOT NULL,
+            qty_received REAL NOT NULL CHECK (qty_received > 0),
+            unit_cost REAL NOT NULL CHECK (unit_cost >= 0),
+            location_id INTEGER NOT NULL,
+            batch_number TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (receipt_id) REFERENCES goods_receipts (id) ON DELETE CASCADE,
+            FOREIGN KEY (po_item_id) REFERENCES purchase_order_items (id) ON DELETE RESTRICT,
+            FOREIGN KEY (item_id) REFERENCES inventory_items (id) ON DELETE RESTRICT,
+            FOREIGN KEY (location_id) REFERENCES inventory_locations (id) ON DELETE RESTRICT
+        );
+    `);
+
+    // 6b. Supplier Bills & Items Tables
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS supplier_bills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bill_number TEXT UNIQUE NOT NULL,
+            supplier_id INTEGER NOT NULL,
+            po_id INTEGER,
+            supplier_invoice_ref TEXT,
+            bill_date DATE NOT NULL,
+            due_date DATE,
+            subtotal REAL NOT NULL DEFAULT 0 CHECK (subtotal >= 0),
+            tax_amount REAL NOT NULL DEFAULT 0 CHECK (tax_amount >= 0),
+            cgst_amount REAL NOT NULL DEFAULT 0 CHECK (cgst_amount >= 0),
+            sgst_amount REAL NOT NULL DEFAULT 0 CHECK (sgst_amount >= 0),
+            igst_amount REAL NOT NULL DEFAULT 0 CHECK (igst_amount >= 0),
+            transport_cost REAL NOT NULL DEFAULT 0 CHECK (transport_cost >= 0),
+            discount REAL NOT NULL DEFAULT 0 CHECK (discount >= 0),
+            grand_total REAL NOT NULL DEFAULT 0 CHECK (grand_total >= 0),
+            paid_amount REAL NOT NULL DEFAULT 0 CHECK (paid_amount >= 0),
+            credited_amount REAL NOT NULL DEFAULT 0 CHECK (credited_amount >= 0),
+            outstanding_amount REAL NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'Posted' CHECK (status IN ('Draft', 'Posted', 'Partially Paid', 'Paid', 'Cancelled', 'Credited')),
+            notes TEXT,
+            created_by TEXT NOT NULL DEFAULT 'System',
+            idempotency_key TEXT UNIQUE,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers (id) ON DELETE RESTRICT,
+            FOREIGN KEY (po_id) REFERENCES purchase_orders (id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS supplier_bill_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bill_id INTEGER NOT NULL,
+            po_item_id INTEGER,
+            item_id INTEGER NOT NULL,
+            qty REAL NOT NULL CHECK (qty > 0),
+            unit_cost REAL NOT NULL CHECK (unit_cost >= 0),
+            tax_rate REAL NOT NULL DEFAULT 18 CHECK (tax_rate >= 0),
+            tax_amount REAL NOT NULL DEFAULT 0 CHECK (tax_amount >= 0),
+            line_total REAL NOT NULL CHECK (line_total >= 0),
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (bill_id) REFERENCES supplier_bills (id) ON DELETE CASCADE,
+            FOREIGN KEY (po_item_id) REFERENCES purchase_order_items (id) ON DELETE SET NULL,
+            FOREIGN KEY (item_id) REFERENCES inventory_items (id) ON DELETE RESTRICT
+        );
+    `);
+
+    // 6c. Supplier Payments & Allocations Tables
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS supplier_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            payment_number TEXT UNIQUE NOT NULL,
+            supplier_id INTEGER NOT NULL,
+            payment_date DATE NOT NULL,
+            amount REAL NOT NULL CHECK (amount > 0),
+            payment_method TEXT NOT NULL CHECK (payment_method IN ('Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Card', 'Credit Note', 'Other')),
+            reference_number TEXT,
+            notes TEXT,
+            status TEXT NOT NULL DEFAULT 'Recorded' CHECK (status IN ('Recorded', 'Reversed')),
+            reversed_at DATETIME,
+            reversal_reason TEXT,
+            created_by TEXT NOT NULL DEFAULT 'System',
+            idempotency_key TEXT UNIQUE,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers (id) ON DELETE RESTRICT
+        );
+
+        CREATE TABLE IF NOT EXISTS supplier_payment_allocations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            payment_id INTEGER NOT NULL,
+            bill_id INTEGER NOT NULL,
+            amount REAL NOT NULL CHECK (amount > 0),
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (payment_id) REFERENCES supplier_payments (id) ON DELETE CASCADE,
+            FOREIGN KEY (bill_id) REFERENCES supplier_bills (id) ON DELETE RESTRICT
+        );
+    `);
+
+    // 6d. Supplier Payable Ledger Table
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS supplier_ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            supplier_id INTEGER NOT NULL,
+            entry_date DATE NOT NULL,
+            entry_type TEXT NOT NULL CHECK (entry_type IN ('OPENING_BALANCE', 'SUPPLIER_BILL', 'SUPPLIER_PAYMENT', 'PAYMENT_REVERSAL', 'PURCHASE_RETURN_CREDIT', 'DEBIT_NOTE', 'CREDIT_NOTE', 'BILL_CANCELLATION', 'MANUAL_CORRECTION')),
+            amount REAL NOT NULL CHECK (amount >= 0),
+            direction TEXT NOT NULL CHECK (direction IN ('DEBIT', 'CREDIT')),
+            source_type TEXT NOT NULL,
+            source_id INTEGER,
+            idempotency_key TEXT UNIQUE,
+            reversal_of_id INTEGER REFERENCES supplier_ledger (id),
+            reason TEXT,
+            created_by TEXT NOT NULL DEFAULT 'System',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers (id) ON DELETE RESTRICT
+        );
+    `);
+
+    // 6e. Purchase Returns Table
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS purchase_returns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            return_number TEXT UNIQUE NOT NULL,
+            po_id INTEGER,
+            receipt_id INTEGER,
+            supplier_id INTEGER NOT NULL,
+            item_id INTEGER NOT NULL,
+            location_id INTEGER,
+            qty_returned REAL NOT NULL CHECK (qty_returned > 0),
+            unit_cost REAL NOT NULL DEFAULT 0 CHECK (unit_cost >= 0),
+            credit_amount REAL NOT NULL DEFAULT 0 CHECK (credit_amount >= 0),
+            status TEXT NOT NULL DEFAULT 'Posted' CHECK (status IN ('Draft', 'Posted', 'Reversed')),
+            reason TEXT NOT NULL DEFAULT 'Damaged / Defective Stock',
+            created_by TEXT NOT NULL DEFAULT 'System',
+            idempotency_key TEXT UNIQUE,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (po_id) REFERENCES purchase_orders (id) ON DELETE SET NULL,
+            FOREIGN KEY (receipt_id) REFERENCES goods_receipts (id) ON DELETE SET NULL,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers (id) ON DELETE RESTRICT,
+            FOREIGN KEY (item_id) REFERENCES inventory_items (id) ON DELETE RESTRICT,
+            FOREIGN KEY (location_id) REFERENCES inventory_locations (id)
+        );
     `);
 
     // 7. Stock Transactions Table

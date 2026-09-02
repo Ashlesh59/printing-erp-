@@ -1394,6 +1394,381 @@ function runMigrations() {
             throw err;
         }
     });
+
+    // Migration 17: Phase 5 Purchasing, Goods Receiving, Supplier Bills, Payments, Returns & Payable Ledger
+    runMigration(17, "Phase 5 Purchasing, Goods Receiving, Supplier Bills, Payments, Returns & Payable Ledger", () => {
+        try {
+            // 1. Safety Backup before migration
+            try {
+                const backupService = require('./services/backup-service');
+                if (backupService && typeof backupService.createSafetyBackup === 'function') {
+                    backupService.createSafetyBackup('migration_17_purchasing_hardening');
+                }
+            } catch(e) {
+                console.warn('[Migration 17] Safety backup notice:', e.message);
+            }
+
+            // 2. Upgrade suppliers table
+            const supplierCols = new Set(db.prepare("PRAGMA table_info(suppliers)").all().map(c => c.name));
+            if (!supplierCols.has('is_archived')) {
+                db.exec("ALTER TABLE suppliers ADD COLUMN is_archived INTEGER DEFAULT 0;");
+            }
+            if (!supplierCols.has('payment_terms')) {
+                db.exec("ALTER TABLE suppliers ADD COLUMN payment_terms TEXT;");
+            }
+            if (!supplierCols.has('opening_balance')) {
+                db.exec("ALTER TABLE suppliers ADD COLUMN opening_balance REAL DEFAULT 0;");
+            }
+
+            // 3. Create Goods Receipts & Items Tables
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS goods_receipts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    receipt_number TEXT UNIQUE NOT NULL,
+                    po_id INTEGER NOT NULL REFERENCES purchase_orders (id) ON DELETE RESTRICT,
+                    supplier_id INTEGER NOT NULL REFERENCES suppliers (id) ON DELETE RESTRICT,
+                    receipt_date DATE NOT NULL,
+                    location_id INTEGER NOT NULL REFERENCES inventory_locations (id) ON DELETE RESTRICT,
+                    supplier_doc_ref TEXT,
+                    status TEXT NOT NULL DEFAULT 'Posted' CHECK (status IN ('Draft', 'Posted', 'Reversed')),
+                    notes TEXT,
+                    created_by TEXT NOT NULL DEFAULT 'System',
+                    idempotency_key TEXT UNIQUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS goods_receipt_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    receipt_id INTEGER NOT NULL REFERENCES goods_receipts (id) ON DELETE CASCADE,
+                    po_item_id INTEGER NOT NULL REFERENCES purchase_order_items (id) ON DELETE RESTRICT,
+                    item_id INTEGER NOT NULL REFERENCES inventory_items (id) ON DELETE RESTRICT,
+                    qty_received REAL NOT NULL CHECK (qty_received > 0),
+                    unit_cost REAL NOT NULL CHECK (unit_cost >= 0),
+                    location_id INTEGER NOT NULL REFERENCES inventory_locations (id) ON DELETE RESTRICT,
+                    batch_number TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_goods_receipts_po_id ON goods_receipts(po_id);
+                CREATE INDEX IF NOT EXISTS idx_goods_receipts_supplier_id ON goods_receipts(supplier_id);
+                CREATE INDEX IF NOT EXISTS idx_goods_receipt_items_receipt_id ON goods_receipt_items(receipt_id);
+                CREATE INDEX IF NOT EXISTS idx_goods_receipt_items_item_id ON goods_receipt_items(item_id);
+            `);
+
+            // 4. Create Supplier Bills & Bill Items Tables
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS supplier_bills (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bill_number TEXT UNIQUE NOT NULL,
+                    supplier_id INTEGER NOT NULL REFERENCES suppliers (id) ON DELETE RESTRICT,
+                    po_id INTEGER REFERENCES purchase_orders (id) ON DELETE SET NULL,
+                    supplier_invoice_ref TEXT,
+                    bill_date DATE NOT NULL,
+                    due_date DATE,
+                    subtotal REAL NOT NULL DEFAULT 0 CHECK (subtotal >= 0),
+                    tax_amount REAL NOT NULL DEFAULT 0 CHECK (tax_amount >= 0),
+                    cgst_amount REAL NOT NULL DEFAULT 0 CHECK (cgst_amount >= 0),
+                    sgst_amount REAL NOT NULL DEFAULT 0 CHECK (sgst_amount >= 0),
+                    igst_amount REAL NOT NULL DEFAULT 0 CHECK (igst_amount >= 0),
+                    transport_cost REAL NOT NULL DEFAULT 0 CHECK (transport_cost >= 0),
+                    discount REAL NOT NULL DEFAULT 0 CHECK (discount >= 0),
+                    grand_total REAL NOT NULL DEFAULT 0 CHECK (grand_total >= 0),
+                    paid_amount REAL NOT NULL DEFAULT 0 CHECK (paid_amount >= 0),
+                    credited_amount REAL NOT NULL DEFAULT 0 CHECK (credited_amount >= 0),
+                    outstanding_amount REAL NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'Posted' CHECK (status IN ('Draft', 'Posted', 'Partially Paid', 'Paid', 'Cancelled', 'Credited')),
+                    notes TEXT,
+                    created_by TEXT NOT NULL DEFAULT 'System',
+                    idempotency_key TEXT UNIQUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS supplier_bill_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bill_id INTEGER NOT NULL REFERENCES supplier_bills (id) ON DELETE CASCADE,
+                    po_item_id INTEGER REFERENCES purchase_order_items (id) ON DELETE SET NULL,
+                    item_id INTEGER NOT NULL REFERENCES inventory_items (id) ON DELETE RESTRICT,
+                    qty REAL NOT NULL CHECK (qty > 0),
+                    unit_cost REAL NOT NULL CHECK (unit_cost >= 0),
+                    tax_rate REAL NOT NULL DEFAULT 18 CHECK (tax_rate >= 0),
+                    tax_amount REAL NOT NULL DEFAULT 0 CHECK (tax_amount >= 0),
+                    line_total REAL NOT NULL CHECK (line_total >= 0),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_supplier_bills_supplier_id ON supplier_bills(supplier_id);
+                CREATE INDEX IF NOT EXISTS idx_supplier_bills_po_id ON supplier_bills(po_id);
+                CREATE INDEX IF NOT EXISTS idx_supplier_bills_status ON supplier_bills(status);
+                CREATE INDEX IF NOT EXISTS idx_supplier_bill_items_bill_id ON supplier_bill_items(bill_id);
+            `);
+
+            // 5. Create Supplier Payments & Allocations Tables
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS supplier_payments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    payment_number TEXT UNIQUE NOT NULL,
+                    supplier_id INTEGER NOT NULL REFERENCES suppliers (id) ON DELETE RESTRICT,
+                    payment_date DATE NOT NULL,
+                    amount REAL NOT NULL CHECK (amount > 0),
+                    payment_method TEXT NOT NULL CHECK (payment_method IN ('Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Card', 'Credit Note', 'Other')),
+                    reference_number TEXT,
+                    notes TEXT,
+                    status TEXT NOT NULL DEFAULT 'Recorded' CHECK (status IN ('Recorded', 'Reversed')),
+                    reversed_at DATETIME,
+                    reversal_reason TEXT,
+                    created_by TEXT NOT NULL DEFAULT 'System',
+                    idempotency_key TEXT UNIQUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS supplier_payment_allocations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    payment_id INTEGER NOT NULL REFERENCES supplier_payments (id) ON DELETE CASCADE,
+                    bill_id INTEGER NOT NULL REFERENCES supplier_bills (id) ON DELETE RESTRICT,
+                    amount REAL NOT NULL CHECK (amount > 0),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_supplier_payments_supplier_id ON supplier_payments(supplier_id);
+                CREATE INDEX IF NOT EXISTS idx_supplier_payments_status ON supplier_payments(status);
+                CREATE INDEX IF NOT EXISTS idx_payment_allocations_payment_id ON supplier_payment_allocations(payment_id);
+                CREATE INDEX IF NOT EXISTS idx_payment_allocations_bill_id ON supplier_payment_allocations(bill_id);
+            `);
+
+            // 6. Create Supplier Payable Ledger Table (Append-Only Financial Source of Truth)
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS supplier_ledger (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    supplier_id INTEGER NOT NULL REFERENCES suppliers (id) ON DELETE RESTRICT,
+                    entry_date DATE NOT NULL,
+                    entry_type TEXT NOT NULL CHECK (entry_type IN ('OPENING_BALANCE', 'SUPPLIER_BILL', 'SUPPLIER_PAYMENT', 'PAYMENT_REVERSAL', 'PURCHASE_RETURN_CREDIT', 'DEBIT_NOTE', 'CREDIT_NOTE', 'BILL_CANCELLATION', 'MANUAL_CORRECTION')),
+                    amount REAL NOT NULL CHECK (amount >= 0),
+                    direction TEXT NOT NULL CHECK (direction IN ('DEBIT', 'CREDIT')),
+                    source_type TEXT NOT NULL,
+                    source_id INTEGER,
+                    idempotency_key TEXT UNIQUE,
+                    reversal_of_id INTEGER REFERENCES supplier_ledger (id),
+                    reason TEXT,
+                    created_by TEXT NOT NULL DEFAULT 'System',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_supplier_ledger_supplier_id ON supplier_ledger(supplier_id);
+                CREATE INDEX IF NOT EXISTS idx_supplier_ledger_entry_date ON supplier_ledger(entry_date);
+                CREATE INDEX IF NOT EXISTS idx_supplier_ledger_entry_type ON supplier_ledger(entry_type);
+            `);
+
+            // 7. Recreate / Upgrade Purchase Orders Table with Comprehensive State Machine
+            const poCols = new Set(db.prepare("PRAGMA table_info(purchase_orders)").all().map(c => c.name));
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS purchase_orders_v17 (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    po_number TEXT UNIQUE NOT NULL,
+                    supplier_id INTEGER NOT NULL REFERENCES suppliers (id) ON DELETE RESTRICT,
+                    order_date DATE NOT NULL,
+                    expected_delivery_date DATE,
+                    received_date DATE,
+                    currency TEXT NOT NULL DEFAULT 'INR',
+                    location_id INTEGER REFERENCES inventory_locations (id),
+                    subtotal REAL NOT NULL DEFAULT 0,
+                    tax_amount REAL NOT NULL DEFAULT 0,
+                    cgst_amount REAL NOT NULL DEFAULT 0,
+                    sgst_amount REAL NOT NULL DEFAULT 0,
+                    igst_amount REAL NOT NULL DEFAULT 0,
+                    transport_cost REAL NOT NULL DEFAULT 0,
+                    discount REAL NOT NULL DEFAULT 0,
+                    grand_total REAL NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Approved', 'Ordered', 'Partially Received', 'Fully Received', 'Closed', 'Cancelled')),
+                    payment_status TEXT NOT NULL DEFAULT 'Unpaid' CHECK (payment_status IN ('Unpaid', 'Partially Paid', 'Paid')),
+                    invoice_number TEXT,
+                    invoice_file_path TEXT,
+                    notes TEXT,
+                    created_by TEXT DEFAULT 'System',
+                    approved_by TEXT,
+                    approved_at DATETIME,
+                    closed_at DATETIME,
+                    cancelled_at DATETIME,
+                    cancellation_reason TEXT,
+                    idempotency_key TEXT UNIQUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+            `);
+
+            const expDateCol = poCols.has('expected_delivery_date') ? 'expected_delivery_date' : 'NULL';
+            const locIdCol = poCols.has('location_id') ? 'location_id' : 'NULL';
+            const gstCol = poCols.has('gst_amount') ? 'gst_amount' : '0';
+            const createdByCol = poCols.has('created_by') ? 'created_by' : "'System'";
+            const approvedByCol = poCols.has('approved_by') ? 'approved_by' : 'NULL';
+            const approvedAtCol = poCols.has('approved_at') ? 'approved_at' : 'NULL';
+            const closedAtCol = poCols.has('closed_at') ? 'closed_at' : 'NULL';
+            const cancelledAtCol = poCols.has('cancelled_at') ? 'cancelled_at' : 'NULL';
+            const cancelReasonCol = poCols.has('cancellation_reason') ? 'cancellation_reason' : 'NULL';
+            const idempCol = poCols.has('idempotency_key') ? 'idempotency_key' : 'NULL';
+
+            db.exec(`
+                INSERT INTO purchase_orders_v17 (
+                    id, po_number, supplier_id, order_date, expected_delivery_date, received_date,
+                    currency, location_id, subtotal, tax_amount, cgst_amount, sgst_amount, igst_amount,
+                    transport_cost, discount, grand_total, status, payment_status,
+                    invoice_number, invoice_file_path, notes, created_by, approved_by, approved_at,
+                    closed_at, cancelled_at, cancellation_reason, idempotency_key, created_at
+                )
+                SELECT
+                    id, po_number, supplier_id, order_date, ${expDateCol}, received_date,
+                    'INR', ${locIdCol}, subtotal, ${gstCol}, ${gstCol} / 2, ${gstCol} / 2, 0,
+                    transport_cost, discount, grand_total,
+                    CASE
+                        WHEN status = 'Received' THEN 'Fully Received'
+                        WHEN status = 'Pending' THEN 'Draft'
+                        WHEN status IN ('Draft', 'Approved', 'Ordered', 'Partially Received', 'Fully Received', 'Closed', 'Cancelled') THEN status
+                        ELSE 'Draft'
+                    END,
+                    payment_status,
+                    invoice_number, invoice_file_path, notes, ${createdByCol}, ${approvedByCol}, ${approvedAtCol},
+                    ${closedAtCol}, ${cancelledAtCol}, ${cancelReasonCol}, ${idempCol}, created_at
+                FROM purchase_orders;
+
+                DROP TABLE purchase_orders;
+                ALTER TABLE purchase_orders_v17 RENAME TO purchase_orders;
+
+                CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier_id ON purchase_orders(supplier_id);
+                CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
+                CREATE INDEX IF NOT EXISTS idx_purchase_orders_po_number ON purchase_orders(po_number);
+            `);
+
+            // 8. Recreate / Upgrade Purchase Order Items Table
+            const poiCols = new Set(db.prepare("PRAGMA table_info(purchase_order_items)").all().map(c => c.name));
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS purchase_order_items_v17 (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    po_id INTEGER NOT NULL REFERENCES purchase_orders (id) ON DELETE CASCADE,
+                    item_id INTEGER NOT NULL REFERENCES inventory_items (id) ON DELETE RESTRICT,
+                    supplier_sku TEXT,
+                    item_name_snapshot TEXT NOT NULL DEFAULT '',
+                    sku_snapshot TEXT NOT NULL DEFAULT '',
+                    unit_snapshot TEXT NOT NULL DEFAULT 'Units',
+                    ordered_qty REAL NOT NULL CHECK (ordered_qty > 0),
+                    received_qty REAL NOT NULL DEFAULT 0 CHECK (received_qty >= 0),
+                    returned_qty REAL NOT NULL DEFAULT 0 CHECK (returned_qty >= 0),
+                    cancelled_qty REAL NOT NULL DEFAULT 0 CHECK (cancelled_qty >= 0),
+                    unit_cost REAL NOT NULL CHECK (unit_cost >= 0),
+                    tax_rate REAL NOT NULL DEFAULT 18 CHECK (tax_rate >= 0),
+                    tax_amount REAL NOT NULL DEFAULT 0 CHECK (tax_amount >= 0),
+                    line_total REAL NOT NULL CHECK (line_total >= 0),
+                    target_location_id INTEGER REFERENCES inventory_locations (id),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+            `);
+
+            const supSkuCol = poiCols.has('supplier_sku') ? 'poi.supplier_sku' : 'NULL';
+            const ordQtyCol = poiCols.has('ordered_qty') ? 'poi.ordered_qty' : (poiCols.has('qty') ? 'poi.qty' : '1');
+            const unitCostCol = poiCols.has('unit_cost') ? 'poi.unit_cost' : (poiCols.has('cost') ? 'poi.cost' : '0');
+            const taxRateCol = poiCols.has('tax_rate') ? 'poi.tax_rate' : (poiCols.has('gst_rate') ? 'poi.gst_rate' : '18');
+            const lineTotCol = poiCols.has('line_total') ? 'poi.line_total' : (poiCols.has('total') ? 'poi.total' : '0');
+            const recQtyCol = poiCols.has('received_qty') ? 'poi.received_qty' : `(CASE WHEN po.status = 'Fully Received' THEN ${ordQtyCol} ELSE 0 END)`;
+            const retQtyCol = poiCols.has('returned_qty') ? 'poi.returned_qty' : '0';
+            const canQtyCol = poiCols.has('cancelled_qty') ? 'poi.cancelled_qty' : '0';
+            const targetLocCol = poiCols.has('target_location_id') ? 'poi.target_location_id' : 'NULL';
+
+            db.exec(`
+                INSERT INTO purchase_order_items_v17 (
+                    id, po_id, item_id, supplier_sku, item_name_snapshot, sku_snapshot, unit_snapshot,
+                    ordered_qty, received_qty, returned_qty, cancelled_qty, unit_cost,
+                    tax_rate, tax_amount, line_total, target_location_id, created_at
+                )
+                SELECT
+                    poi.id, poi.po_id, poi.item_id, ${supSkuCol},
+                    COALESCE(i.name, 'Item #' || poi.item_id),
+                    COALESCE(i.sku, 'SKU-' || poi.item_id),
+                    COALESCE(i.unit, 'Units'),
+                    ${ordQtyCol},
+                    ${recQtyCol},
+                    ${retQtyCol},
+                    ${canQtyCol},
+                    ${unitCostCol},
+                    ${taxRateCol},
+                    (${ordQtyCol} * ${unitCostCol} * (${taxRateCol} / 100)),
+                    ${lineTotCol},
+                    ${targetLocCol},
+                    poi.created_at
+                FROM purchase_order_items poi
+                JOIN purchase_orders po ON poi.po_id = po.id
+                LEFT JOIN inventory_items i ON poi.item_id = i.id;
+
+                DROP TABLE purchase_order_items;
+                ALTER TABLE purchase_order_items_v17 RENAME TO purchase_order_items;
+
+                CREATE INDEX IF NOT EXISTS idx_po_items_po_id ON purchase_order_items(po_id);
+                CREATE INDEX IF NOT EXISTS idx_po_items_item_id ON purchase_order_items(item_id);
+            `);
+
+            // 9. Recreate / Upgrade Purchase Returns Table
+            const prCols = new Set(db.prepare("PRAGMA table_info(purchase_returns)").all().map(c => c.name));
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS purchase_returns_v17 (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    return_number TEXT UNIQUE NOT NULL,
+                    po_id INTEGER REFERENCES purchase_orders (id) ON DELETE SET NULL,
+                    receipt_id INTEGER REFERENCES goods_receipts (id) ON DELETE SET NULL,
+                    supplier_id INTEGER NOT NULL REFERENCES suppliers (id) ON DELETE RESTRICT,
+                    item_id INTEGER NOT NULL REFERENCES inventory_items (id) ON DELETE RESTRICT,
+                    location_id INTEGER REFERENCES inventory_locations (id),
+                    qty_returned REAL NOT NULL CHECK (qty_returned > 0),
+                    unit_cost REAL NOT NULL DEFAULT 0 CHECK (unit_cost >= 0),
+                    credit_amount REAL NOT NULL DEFAULT 0 CHECK (credit_amount >= 0),
+                    status TEXT NOT NULL DEFAULT 'Posted' CHECK (status IN ('Draft', 'Posted', 'Reversed')),
+                    reason TEXT NOT NULL DEFAULT 'Damaged / Defective Stock',
+                    created_by TEXT NOT NULL DEFAULT 'System',
+                    idempotency_key TEXT UNIQUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+            `);
+
+            const prPoId = prCols.has('po_id') ? 'po_id' : 'NULL';
+            const prSupId = prCols.has('supplier_id') ? 'supplier_id' : '1';
+            const prQty = prCols.has('qty_returned') ? 'qty_returned' : (prCols.has('qty') ? 'qty' : '1');
+            const prRefund = prCols.has('credit_amount') ? 'credit_amount' : (prCols.has('refund_amount') ? 'refund_amount' : '0');
+            const prRetNum = prCols.has('return_number') ? 'return_number' : "('RET-' || id)";
+
+            db.exec(`
+                INSERT INTO purchase_returns_v17 (
+                    id, return_number, po_id, supplier_id, item_id,
+                    qty_returned, credit_amount, status, reason, created_at
+                )
+                SELECT
+                    id, ${prRetNum}, ${prPoId}, ${prSupId}, item_id,
+                    ${prQty}, ${prRefund}, 'Posted', 'Legacy Return', created_at
+                FROM purchase_returns;
+
+                DROP TABLE purchase_returns;
+                ALTER TABLE purchase_returns_v17 RENAME TO purchase_returns;
+
+                CREATE INDEX IF NOT EXISTS idx_purchase_returns_supplier_id ON purchase_returns(supplier_id);
+                CREATE INDEX IF NOT EXISTS idx_purchase_returns_item_id ON purchase_returns(item_id);
+            `);
+
+            // 10. Seed Supplier Ledger Opening Balances for all existing suppliers
+            const suppliersWithBalance = db.prepare("SELECT id, name, outstanding_balance FROM suppliers WHERE outstanding_balance != 0").all();
+            const insertOpeningLedger = db.prepare(`
+                INSERT OR IGNORE INTO supplier_ledger (
+                    supplier_id, entry_date, entry_type, amount, direction, source_type, source_id, reason, created_by
+                ) VALUES (?, CURRENT_DATE, 'OPENING_BALANCE', ?, ?, 'migration', ?, 'Legacy opening balance snapshot', 'Migration 17')
+            `);
+
+            for (const s of suppliersWithBalance) {
+                const bal = parseFloat(s.outstanding_balance) || 0;
+                if (bal > 0) {
+                    insertOpeningLedger.run(s.id, bal, 'CREDIT', s.id);
+                } else if (bal < 0) {
+                    insertOpeningLedger.run(s.id, Math.abs(bal), 'DEBIT', s.id);
+                }
+            }
+
+        } catch (err) {
+            console.error('[Migration 17] Error applying purchasing hardening migration:', err);
+            throw err;
+        }
+    });
 }
 
 module.exports = { runMigrations };

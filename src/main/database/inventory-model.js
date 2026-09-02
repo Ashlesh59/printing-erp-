@@ -9,6 +9,7 @@ const ForecastService = require('./services/forecast-service');
 const ValuationService = require('./services/valuation-service');
 const NotificationService = require('./services/notification-service');
 const CountService = require('./services/count-service');
+const PurchasingService = require('../services/purchasing/purchasing-service');
 
 const InventoryModel = {
     // ──────────────────────────────────────────────────────────────
@@ -50,21 +51,38 @@ const InventoryModel = {
     // Suppliers
     // ──────────────────────────────────────────────────────────────
     getSuppliers: () => {
-        return InventoryRepository.getSuppliers();
+        return db.prepare("SELECT * FROM suppliers WHERE is_archived = 0 ORDER BY name ASC").all();
+    },
+    getAllSuppliersIncludingArchived: () => {
+        return db.prepare("SELECT * FROM suppliers ORDER BY name ASC").all();
     },
     createSupplier: (data) => {
         try {
-            const stmt = db.prepare('INSERT INTO suppliers (name, phone, email, gstin, address, outstanding_balance) VALUES (?, ?, ?, ?, ?, ?)');
-            const res = stmt.run(data.name.trim(), data.phone || '', data.email || '', data.gstin || '', data.address || '', parseFloat(data.outstanding_balance) || 0);
-            return { success: true, id: res.lastInsertRowid };
+            const openBal = PurchasingService.roundMoney(parseFloat(data.opening_balance || data.outstanding_balance) || 0);
+            const stmt = db.prepare('INSERT INTO suppliers (name, phone, email, gstin, address, payment_terms, opening_balance, outstanding_balance, is_archived) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)');
+            const res = stmt.run(data.name.trim(), data.phone || '', data.email || '', data.gstin || '', data.address || '', data.payment_terms || '', openBal);
+            const supplierId = res.lastInsertRowid;
+
+            if (openBal !== 0) {
+                const direction = openBal > 0 ? 'CREDIT' : 'DEBIT';
+                db.prepare(`
+                    INSERT INTO supplier_ledger (
+                        supplier_id, entry_date, entry_type, amount, direction, source_type, source_id, reason, created_by
+                    ) VALUES (?, CURRENT_DATE, 'OPENING_BALANCE', ?, ?, 'manual', ?, 'Opening Balance', 'System')
+                `).run(supplierId, Math.abs(openBal), direction, supplierId);
+
+                PurchasingService.syncSupplierBalance(supplierId, db);
+            }
+
+            return { success: true, id: supplierId };
         } catch (e) {
             return { success: false, error: e.message };
         }
     },
     updateSupplier: (id, data) => {
         try {
-            const stmt = db.prepare('UPDATE suppliers SET name = ?, phone = ?, email = ?, gstin = ?, address = ?, outstanding_balance = ? WHERE id = ?');
-            stmt.run(data.name.trim(), data.phone || '', data.email || '', data.gstin || '', data.address || '', parseFloat(data.outstanding_balance) || 0, id);
+            const stmt = db.prepare('UPDATE suppliers SET name = ?, phone = ?, email = ?, gstin = ?, address = ?, payment_terms = ? WHERE id = ?');
+            stmt.run(data.name.trim(), data.phone || '', data.email || '', data.gstin || '', data.address || '', data.payment_terms || '', id);
             return { success: true };
         } catch (e) {
             return { success: false, error: e.message };
@@ -72,8 +90,19 @@ const InventoryModel = {
     },
     deleteSupplier: (id) => {
         try {
-            const itemsUse = db.prepare('SELECT COUNT(*) as count FROM inventory_items WHERE supplier_id = ?').get(id);
-            if (itemsUse.count > 0) return { success: false, error: "Supplier linked to active items" };
+            // Check if supplier has any historical transactions
+            const poCount = db.prepare('SELECT COUNT(*) as count FROM purchase_orders WHERE supplier_id = ?').get(id).count;
+            const billCount = db.prepare('SELECT COUNT(*) as count FROM supplier_bills WHERE supplier_id = ?').get(id).count;
+            const payCount = db.prepare('SELECT COUNT(*) as count FROM supplier_payments WHERE supplier_id = ?').get(id).count;
+            const retCount = db.prepare('SELECT COUNT(*) as count FROM purchase_returns WHERE supplier_id = ?').get(id).count;
+            const itemsUse = db.prepare('SELECT COUNT(*) as count FROM inventory_items WHERE supplier_id = ?').get(id).count;
+
+            if (poCount > 0 || billCount > 0 || payCount > 0 || retCount > 0 || itemsUse > 0) {
+                // Archive supplier safely
+                db.prepare('UPDATE suppliers SET is_archived = 1 WHERE id = ?').run(id);
+                return { success: true, archived: true, message: "Supplier has linked transaction history and was archived safely." };
+            }
+
             db.prepare('DELETE FROM suppliers WHERE id = ?').run(id);
             return { success: true };
         } catch (e) {
@@ -163,35 +192,99 @@ const InventoryModel = {
     },
 
     // ──────────────────────────────────────────────────────────────
-    // Purchase Orders
+    // Purchase Orders & Purchasing Engine
     // ──────────────────────────────────────────────────────────────
-    getPurchaseOrders: () => {
-        return POService.getPOs();
+    getPurchaseOrders: (filters) => {
+        return PurchasingService.getPurchaseOrders(filters);
     },
     getPurchaseOrderById: (id) => {
-        return POService.getPOById(id);
+        return PurchasingService.getPurchaseOrderById(id);
     },
     createPurchaseOrder: (data) => {
         try {
-            const id = POService.createPO(data, data.operator, data.role);
-            return { success: true, id };
+            return PurchasingService.createPurchaseOrder(data, { user: { name: data.operator || 'Admin', role: data.role || 'Admin' } });
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    },
+    approvePurchaseOrder: (poId, data) => {
+        try {
+            return PurchasingService.approvePurchaseOrder(poId, { user: { name: data?.operator || 'Admin', role: data?.role || 'Admin' } });
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    },
+    markPurchaseOrderOrdered: (poId, data) => {
+        try {
+            return PurchasingService.markPurchaseOrderOrdered(poId, { user: { name: data?.operator || 'Operator', role: data?.role || 'Operator' } });
         } catch (e) {
             return { success: false, error: e.message };
         }
     },
     receivePurchaseOrder: (poId, data) => {
         try {
-            return POService.receivePO(poId, data, data.operator, data.role);
+            const payload = {
+                po_id: poId,
+                ...data
+            };
+            return PurchasingService.receivePurchaseOrderItems(payload, { user: { name: data.operator || 'Admin', role: data.role || 'Admin' } });
         } catch (e) {
             return { success: false, error: e.message };
         }
     },
     cancelPurchaseOrder: (poId, data) => {
         try {
-            return POService.cancelPO(poId, data ? data.operator : 'System', data ? data.role : 'System');
+            const reason = data ? data.reason || 'Cancelled by user' : 'Cancelled by user';
+            return PurchasingService.cancelPurchaseOrder(poId, reason, { user: { name: data?.operator || 'Admin', role: data?.role || 'Admin' } });
         } catch (e) {
             return { success: false, error: e.message };
         }
+    },
+    getGoodsReceipts: (poId) => {
+        return PurchasingService.getGoodsReceipts(poId);
+    },
+    getSupplierBills: (supplierId) => {
+        return PurchasingService.getSupplierBills(supplierId);
+    },
+    postSupplierBill: (data) => {
+        try {
+            return PurchasingService.postSupplierBill(data, { user: { name: data.operator || 'Admin', role: data.role || 'Admin' } });
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    },
+    getSupplierPayments: (supplierId) => {
+        return PurchasingService.getSupplierPayments(supplierId);
+    },
+    recordSupplierPayment: (data) => {
+        try {
+            return PurchasingService.recordSupplierPayment(data, { user: { name: data.operator || 'Admin', role: data.role || 'Admin' } });
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    },
+    reverseSupplierPayment: (paymentId, data) => {
+        try {
+            return PurchasingService.reverseSupplierPayment(paymentId, data?.reason, { user: { name: data?.operator || 'Admin', role: data?.role || 'Admin' } });
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    },
+    getPurchaseReturns: (supplierId) => {
+        return PurchasingService.getPurchaseReturns(supplierId);
+    },
+    createPurchaseReturn: (data) => {
+        try {
+            return PurchasingService.createPurchaseReturn(data, { user: { name: data.operator || 'Admin', role: data.role || 'Admin' } });
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    },
+    getSupplierStatement: (supplierId) => {
+        return PurchasingService.getSupplierStatement(supplierId);
+    },
+    getPurchasingIntegrityReport: () => {
+        return PurchasingService.getPurchasingIntegrityReport();
     },
 
     // ──────────────────────────────────────────────────────────────

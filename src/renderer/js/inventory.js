@@ -886,8 +886,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         tbody.innerHTML = filtered.map(po => {
             let statusTag = 'status-pending';
-            if (po.status === 'Ordered') statusTag = 'status-ordered';
-            else if (po.status === 'Received') statusTag = 'status-received';
+            if (po.status === 'Draft') statusTag = 'status-draft';
+            else if (po.status === 'Approved') statusTag = 'status-approved';
+            else if (po.status === 'Ordered') statusTag = 'status-ordered';
+            else if (po.status === 'Partially Received') statusTag = 'status-partially-received';
+            else if (po.status === 'Fully Received') statusTag = 'status-received';
+            else if (po.status === 'Closed') statusTag = 'status-inactive';
             else if (po.status === 'Cancelled') statusTag = 'status-cancelled';
 
             const receivedDate = po.received_date ? po.received_date : '<span style="color:var(--text-secondary);">—</span>';
@@ -1103,7 +1107,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const res = await window.api.createInvPurchaseOrder(poData);
                 if (res.success) {
-                    toast(`Purchase order "${res.po_number}" raised successfully!`);
+                    toast(`Purchase order "${res.po_number || res.poNumber}" raised successfully!`);
                     closeInvModal('inv-po-modal');
                     loadPOData();
                 } else {
@@ -1125,13 +1129,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const modalFooter = document.getElementById('po-details-modal-footer');
 
             let statusTag = 'status-pending';
-            if (po.status === 'Ordered') statusTag = 'status-ordered';
-            else if (po.status === 'Received') statusTag = 'status-received';
+            if (po.status === 'Draft') statusTag = 'status-draft';
+            else if (po.status === 'Approved') statusTag = 'status-approved';
+            else if (po.status === 'Ordered') statusTag = 'status-ordered';
+            else if (po.status === 'Partially Received') statusTag = 'status-partially-received';
+            else if (po.status === 'Fully Received') statusTag = 'status-received';
+            else if (po.status === 'Closed') statusTag = 'status-inactive';
             else if (po.status === 'Cancelled') statusTag = 'status-cancelled';
 
             const receivedRow = po.received_date ? `
                 <div style="display:flex; justify-content:space-between; margin-bottom: 8px;">
-                    <span style="color:var(--text-secondary);">Received Date:</span>
+                    <span style="color:var(--text-secondary);">Last Received:</span>
                     <strong>${po.received_date}</strong>
                 </div>
             ` : '';
@@ -1167,51 +1175,66 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
 
                 <div class="panel" style="margin-bottom: 20px;">
-                    <h4 style="margin-top: 0; margin-bottom: 12px; font-weight:700;">Purchase Order Items</h4>
+                    <h4 style="margin-top: 0; margin-bottom: 12px; font-weight:700;">Purchase Order Line Items</h4>
                     <table class="po-items-table" style="margin:0;">
                         <thead>
                             <tr>
                                 <th>SKU</th>
                                 <th>Item Name</th>
-                                <th>Qty Ordered</th>
+                                <th>Ordered</th>
+                                <th>Received</th>
+                                <th>Remaining</th>
                                 <th>Unit Cost</th>
                                 <th>GST %</th>
-                                <th>Total Price</th>
+                                <th>Line Total</th>
                             </tr>
                         </thead>
                         <tbody>
-                            ${po.items.map(item => `
-                                <tr>
-                                    <td><code>${escapeHtml(item.sku)}</code></td>
-                                    <td><strong>${escapeHtml(item.item_name)}</strong></td>
-                                    <td>${item.qty} ${escapeHtml(item.unit)}</td>
-                                    <td>₹${item.cost.toFixed(2)}</td>
-                                    <td>${item.gst_rate}%</td>
-                                    <td style="font-weight:700;">₹${item.total.toFixed(2)}</td>
-                                </tr>
-                            `).join('')}
+                            ${po.items.map(item => {
+                                const ordered = item.ordered_qty !== undefined ? item.ordered_qty : item.qty;
+                                const received = item.received_qty || 0;
+                                const remaining = Math.max(0, ordered - received - (item.cancelled_qty || 0));
+                                const cost = item.unit_cost !== undefined ? item.unit_cost : item.cost;
+                                const total = item.line_total !== undefined ? item.line_total : item.total;
+                                const itemName = item.item_name_snapshot || item.item_name || item.current_item_name;
+                                const sku = item.sku_snapshot || item.sku || item.current_sku;
+                                const unit = item.unit_snapshot || item.unit || item.current_unit || 'Units';
+
+                                return `
+                                    <tr>
+                                        <td><code>${escapeHtml(sku)}</code></td>
+                                        <td><strong>${escapeHtml(itemName)}</strong></td>
+                                        <td>${ordered} ${escapeHtml(unit)}</td>
+                                        <td style="color:${received > 0 ? '#10b981' : 'inherit'}; font-weight:600;">${received}</td>
+                                        <td style="color:${remaining > 0 ? '#f59e0b' : 'inherit'}; font-weight:600;">${remaining}</td>
+                                        <td>₹${cost.toFixed(2)}</td>
+                                        <td>${item.tax_rate || item.gst_rate}%</td>
+                                        <td style="font-weight:700;">₹${total.toFixed(2)}</td>
+                                    </tr>
+                                `;
+                            }).join('')}
                         </tbody>
                     </table>
                 </div>
 
                 <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px; font-size:0.9rem; margin-top:16px; border-top: 1px solid var(--border-color); padding-top:16px;">
-                    <div style="display:flex; justify-content:space-between; width:220px;">
+                    <div style="display:flex; justify-content:space-between; width:240px;">
                         <span style="color:var(--text-secondary);">Subtotal:</span>
                         <span>₹${po.subtotal.toFixed(2)}</span>
                     </div>
-                    <div style="display:flex; justify-content:space-between; width:220px;">
+                    <div style="display:flex; justify-content:space-between; width:240px;">
                         <span style="color:var(--text-secondary);">Total GST:</span>
-                        <span>₹${po.gst_amount.toFixed(2)}</span>
+                        <span>₹${(po.tax_amount || po.gst_amount || 0).toFixed(2)}</span>
                     </div>
-                    <div style="display:flex; justify-content:space-between; width:220px;">
+                    <div style="display:flex; justify-content:space-between; width:240px;">
                         <span style="color:var(--text-secondary);">Transport Cost:</span>
                         <span>+ ₹${po.transport_cost.toFixed(2)}</span>
                     </div>
-                    <div style="display:flex; justify-content:space-between; width:220px;">
+                    <div style="display:flex; justify-content:space-between; width:240px;">
                         <span style="color:var(--text-secondary);">Discounts:</span>
                         <span>- ₹${po.discount.toFixed(2)}</span>
                     </div>
-                    <div style="display:flex; justify-content:space-between; width:220px; font-size: 1.1rem; font-weight:700; border-top:1px solid var(--border-color); padding-top:8px; margin-top:4px;">
+                    <div style="display:flex; justify-content:space-between; width:240px; font-size: 1.1rem; font-weight:700; border-top:1px solid var(--border-color); padding-top:8px; margin-top:4px;">
                         <span>Grand Total:</span>
                         <span style="color: var(--accent-color);">₹${po.grand_total.toFixed(2)}</span>
                     </div>
@@ -1224,36 +1247,52 @@ document.addEventListener('DOMContentLoaded', () => {
                 ` : ''}
             `;
 
-            // Render PO Details action buttons dynamically
-            if (po.status === 'Pending' || po.status === 'Ordered') {
-                modalFooter.innerHTML = `
-                    <div style="display:flex; gap:12px; width:100%; justify-content:space-between;">
-                        <button class="action-btn" style="background:#ef4444; color:white; border:none;" onclick="cancelPo(${po.id})">Cancel PO</button>
-                        <div style="display:flex; gap:12px;">
-                            <button class="action-btn" style="background:#8b5cf6; color:white; border:none;" onclick="showReceivePoForm(${po.id})">📦 Mark as Received (Stock In)</button>
-                            <button class="action-btn" style="background:#e2e8f0; color:#1e293b;" onclick="closeInvModal('inv-po-details-modal')">Close</button>
-                        </div>
+            // Render PO Details action buttons dynamically based on lifecycle
+            let actionButtons = '';
+            if (po.status === 'Draft') {
+                actionButtons = `
+                    <button class="action-btn" style="background:#ef4444; color:white; border:none;" onclick="cancelPo(${po.id})">Cancel PO</button>
+                    <div style="display:flex; gap:12px;">
+                        <button class="action-btn" style="background:#3b82f6; color:white; border:none;" onclick="approvePo(${po.id})">✓ Approve PO</button>
+                        <button class="action-btn" style="background:#e2e8f0; color:#1e293b;" onclick="closeInvModal('inv-po-details-modal')">Close</button>
+                    </div>
+                `;
+            } else if (po.status === 'Approved') {
+                actionButtons = `
+                    <button class="action-btn" style="background:#ef4444; color:white; border:none;" onclick="cancelPo(${po.id})">Cancel PO</button>
+                    <div style="display:flex; gap:12px;">
+                        <button class="action-btn" style="background:#6366f1; color:white; border:none;" onclick="orderPo(${po.id})">🚀 Mark Ordered / Sent</button>
+                        <button class="action-btn" style="background:#8b5cf6; color:white; border:none;" onclick="showReceivePoForm(${po.id})">📦 Receive Stock</button>
+                        <button class="action-btn" style="background:#e2e8f0; color:#1e293b;" onclick="closeInvModal('inv-po-details-modal')">Close</button>
+                    </div>
+                `;
+            } else if (po.status === 'Ordered' || po.status === 'Partially Received') {
+                actionButtons = `
+                    <button class="action-btn" style="background:#ef4444; color:white; border:none;" onclick="cancelPo(${po.id})">Cancel Remainder</button>
+                    <div style="display:flex; gap:12px;">
+                        <button class="action-btn" style="background:#8b5cf6; color:white; border:none;" onclick="showReceivePoForm(${po.id})">📦 Receive Stock (Partial/Full)</button>
+                        <button class="action-btn" style="background:#e2e8f0; color:#1e293b;" onclick="closeInvModal('inv-po-details-modal')">Close</button>
                     </div>
                 `;
             } else {
-                modalFooter.innerHTML = `
+                actionButtons = `
                     <button class="action-btn" style="background:var(--accent-color); color:white;" onclick="printPoSheet(${po.id})">🖨️ Export / Print</button>
                     <button class="action-btn" style="background:#e2e8f0; color:#1e293b;" onclick="closeInvModal('inv-po-details-modal')">Close</button>
                 `;
             }
 
+            modalFooter.innerHTML = `<div style="display:flex; gap:12px; width:100%; justify-content:space-between;">${actionButtons}</div>`;
             openInvModal('inv-po-details-modal');
         } catch (e) {
             toast(e.message, 'error');
         }
     };
 
-    window.cancelPo = async (poId) => {
-        if (!confirm("Are you sure you want to cancel this purchase order? Outstanding supplier balances will be reverted.")) return;
+    window.approvePo = async (poId) => {
         try {
-            const res = await window.api.cancelInvPurchaseOrder(poId, { operator: 'Admin' });
+            const res = await window.api.approveInvPurchaseOrder(poId, { operator: 'Admin' });
             if (res.success) {
-                toast("Purchase order cancelled.");
+                toast("Purchase order approved.");
                 closeInvModal('inv-po-details-modal');
                 loadPOData();
             } else {
@@ -1264,61 +1303,163 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    window.showReceivePoForm = (poId) => {
-        closeInvModal('inv-po-details-modal');
-        
-        // Open details modal but replace body with receipt form
-        const modalContent = document.getElementById('po-details-modal-content');
-        const modalFooter = document.getElementById('po-details-modal-footer');
+    window.orderPo = async (poId) => {
+        try {
+            const res = await window.api.markInvPurchaseOrderOrdered(poId, { operator: 'Admin' });
+            if (res.success) {
+                toast("Purchase order marked as Ordered.");
+                closeInvModal('inv-po-details-modal');
+                loadPOData();
+            } else {
+                toast(res.error, 'error');
+            }
+        } catch (e) {
+            toast(e.message, 'error');
+        }
+    };
 
-        modalContent.innerHTML = `
-            <form id="po-receipt-form" onsubmit="event.preventDefault();" style="display:flex; flex-direction:column; gap:16px; padding:10px 0;">
-                <h3 style="margin-top:0; margin-bottom:12px;">Confirm PO Receipt (Stock In)</h3>
-                <p style="color:var(--text-secondary);font-size:0.9rem;margin-bottom:16px;">This will add the PO quantities directly to item inventories and recalculate their average costs.</p>
-                <div class="form-grid-2">
-                    <div class="form-group">
-                        <label>Receipt Date *</label>
-                        <input type="date" id="po-receive-date" required>
+    window.cancelPo = async (poId) => {
+        if (!confirm("Are you sure you want to cancel / close this purchase order?")) return;
+        try {
+            const res = await window.api.cancelInvPurchaseOrder(poId, { reason: 'User cancelled', operator: 'Admin' });
+            if (res.success) {
+                toast("Purchase order status updated.");
+                closeInvModal('inv-po-details-modal');
+                loadPOData();
+            } else {
+                toast(res.error, 'error');
+            }
+        } catch (e) {
+            toast(e.message, 'error');
+        }
+    };
+
+    window.showReceivePoForm = async (poId) => {
+        try {
+            const po = await window.api.getInvPurchaseOrderById(poId);
+            if (!po) return;
+
+            closeInvModal('inv-po-details-modal');
+
+            const modalContent = document.getElementById('po-details-modal-content');
+            const modalFooter = document.getElementById('po-details-modal-footer');
+
+            const receivingLinesHtml = po.items.map(item => {
+                const ordered = item.ordered_qty !== undefined ? item.ordered_qty : item.qty;
+                const received = item.received_qty || 0;
+                const remaining = Math.max(0, ordered - received - (item.cancelled_qty || 0));
+                const itemName = item.item_name_snapshot || item.item_name || item.current_item_name;
+                const sku = item.sku_snapshot || item.sku || item.current_sku;
+
+                return `
+                    <tr data-po-item-id="${item.id}">
+                        <td><strong>${escapeHtml(itemName)}</strong><br><small><code>${escapeHtml(sku)}</code></small></td>
+                        <td>${ordered}</td>
+                        <td style="color:#10b981;">${received}</td>
+                        <td style="color:#f59e0b; font-weight:700;">${remaining}</td>
+                        <td>
+                            <input type="number" class="po-receive-line-qty" data-po-item-id="${item.id}"
+                                   min="0" max="${remaining}" step="0.01" value="${remaining}"
+                                   style="width:90px; padding:6px; border-radius:6px; border:1px solid var(--border-color); background:var(--input-bg); color:var(--text-primary);">
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            modalContent.innerHTML = `
+                <form id="po-receipt-form" onsubmit="event.preventDefault();" style="display:flex; flex-direction:column; gap:16px; padding:10px 0;">
+                    <h3 style="margin-top:0; margin-bottom:4px;">Receive PO Stock (Partial / Full)</h3>
+                    <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:12px;">Specify the quantity received for each line. Missing or partial quantities remain on the PO.</p>
+
+                    <div class="form-grid-2">
+                        <div class="form-group">
+                            <label>Receipt Date *</label>
+                            <input type="date" id="po-receive-date" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Supplier Delivery Note / Bill No</label>
+                            <input type="text" id="po-receive-invoice" placeholder="e.g. DC-10293">
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label>Supplier Bill / Invoice Number</label>
-                        <input type="text" id="po-receive-invoice" placeholder="e.g. INV-10293">
+
+                    <div class="panel" style="margin: 8px 0;">
+                        <table class="po-items-table" style="margin:0;">
+                            <thead>
+                                <tr>
+                                    <th>Item</th>
+                                    <th>Ordered</th>
+                                    <th>Received</th>
+                                    <th>Remaining</th>
+                                    <th>Qty To Receive Now</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${receivingLinesHtml}
+                            </tbody>
+                        </table>
                     </div>
-                </div>
-                <div class="form-group">
-                    <label>Receipt Notes</label>
-                    <textarea id="po-receive-notes" rows="2" placeholder="e.g. All items arrived intact. Checked by clerk."></textarea>
-                </div>
-            </form>
-        `;
 
-        document.getElementById('po-receive-date').value = new Date().toISOString().split('T')[0];
+                    <div class="form-group">
+                        <label>Receipt Notes</label>
+                        <textarea id="po-receive-notes" rows="2" placeholder="e.g. Received at central warehouse in good condition."></textarea>
+                    </div>
+                </form>
+            `;
 
-        modalFooter.innerHTML = `
-            <button class="action-btn" style="background:#e2e8f0; color:#1e293b;" onclick="closeInvModal('inv-po-details-modal')">Cancel</button>
-            <button class="action-btn" style="background:#10b981; color:white; border:none;" onclick="confirmPoReceipt(${poId})">📦 Confirm Stock In</button>
-        `;
+            document.getElementById('po-receive-date').value = new Date().toISOString().split('T')[0];
 
-        openInvModal('inv-po-details-modal');
+            modalFooter.innerHTML = `
+                <button class="action-btn" style="background:#e2e8f0; color:#1e293b;" onclick="closeInvModal('inv-po-details-modal')">Cancel</button>
+                <button class="action-btn" style="background:#10b981; color:white; border:none;" onclick="confirmPoReceipt(${poId})">📦 Post Goods Receipt</button>
+            `;
+
+            openInvModal('inv-po-details-modal');
+        } catch (e) {
+            toast(e.message, 'error');
+        }
     };
 
     window.confirmPoReceipt = async (poId) => {
         const form = document.getElementById('po-receipt-form');
         if (!form.reportValidity()) return;
 
+        const qtyInputs = document.querySelectorAll('.po-receive-line-qty');
+        const items = [];
+        let totalReceiving = 0;
+
+        qtyInputs.forEach(input => {
+            const poItemId = parseInt(input.getAttribute('data-po-item-id'));
+            const qty = parseFloat(input.value) || 0;
+            if (qty > 0) {
+                totalReceiving += qty;
+                items.push({
+                    po_item_id: poItemId,
+                    qty_received: qty
+                });
+            }
+        });
+
+        if (totalReceiving <= 0) {
+            toast("Please enter a quantity greater than 0 for at least one item to receive.", 'warning');
+            return;
+        }
+
         const data = {
+            po_id: poId,
             received_date: document.getElementById('po-receive-date').value,
-            invoice_number: document.getElementById('po-receive-invoice').value.trim(),
+            supplier_doc_ref: document.getElementById('po-receive-invoice').value.trim(),
             notes: document.getElementById('po-receive-notes').value.trim(),
+            items,
             operator: 'Admin'
         };
 
         try {
             const res = await window.api.receiveInvPurchaseOrder(poId, data);
             if (res.success) {
-                toast("Purchase order received! Stock added to inventory.");
+                toast(`Goods receipt #${res.receiptNumber || res.receipt_number} posted successfully! Status: ${res.poStatus}`);
                 closeInvModal('inv-po-details-modal');
                 loadPOData();
+                loadItemsData();
             } else {
                 toast(res.error, 'error');
             }

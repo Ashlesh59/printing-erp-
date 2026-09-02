@@ -1,46 +1,17 @@
 const db = require('../db');
+const PurchasingService = require('../../services/purchasing/purchasing-service');
 
 const PORepository = {
     // PO Header
-    getPOs: () => {
-        return db.prepare(`
-            SELECT po.*, s.name as supplier_name
-            FROM purchase_orders po
-            JOIN suppliers s ON po.supplier_id = s.id
-            ORDER BY po.created_at DESC
-        `).all();
+    getPOs: (filters) => {
+        return PurchasingService.getPurchaseOrders(filters);
     },
     getPOById: (id) => {
-        const po = db.prepare(`
-            SELECT po.*, s.name as supplier_name, s.phone as supplier_phone, s.email as supplier_email, s.gstin as supplier_gstin, s.address as supplier_address
-            FROM purchase_orders po
-            JOIN suppliers s ON po.supplier_id = s.id
-            WHERE po.id = ?
-        `).get(id);
-
-        if (po) {
-            po.items = db.prepare(`
-                SELECT poi.*, i.name as item_name, i.sku, i.unit
-                FROM purchase_order_items poi
-                JOIN inventory_items i ON poi.item_id = i.id
-                WHERE poi.po_id = ?
-            `).all(id);
-        }
-        return po;
+        return PurchasingService.getPurchaseOrderById(id);
     },
     createPO: (data) => {
-        const stmt = db.prepare(`
-            INSERT INTO purchase_orders (
-                po_number, supplier_id, order_date, subtotal, gst_amount, transport_cost, discount, grand_total, payment_status, status, invoice_number, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        const res = stmt.run(
-            data.po_number, data.supplier_id, data.order_date,
-            data.subtotal, data.gst_amount, data.transport_cost,
-            data.discount, data.grand_total, data.payment_status,
-            data.status || 'Pending', data.invoice_number, data.notes
-        );
-        return res.lastInsertRowid;
+        const res = PurchasingService.createPurchaseOrder(data);
+        return res.poId;
     },
     updatePOStatus: (poId, status, receivedDate = null) => {
         if (receivedDate) {
@@ -67,27 +38,46 @@ const PORepository = {
 
     // PO Line Items
     createPOItem: (poId, itemId, qty, cost, gstRate, total) => {
+        const item = db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(itemId);
+        const name = item ? item.name : `Item #${itemId}`;
+        const sku = item ? item.sku : `SKU-${itemId}`;
+        const unit = item ? item.unit : 'Units';
+
         const stmt = db.prepare(`
-            INSERT INTO purchase_order_items (po_id, item_id, qty, cost, gst_rate, total)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO purchase_order_items (
+                po_id, item_id, item_name_snapshot, sku_snapshot, unit_snapshot,
+                ordered_qty, received_qty, returned_qty, cancelled_qty, unit_cost, gst_rate, tax_rate, tax_amount, line_total
+            ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?)
         `);
-        stmt.run(poId, itemId, qty, cost, gstRate, total);
+        const taxAmount = (qty * cost * (gstRate / 100));
+        stmt.run(poId, itemId, name, sku, unit, qty, cost, gstRate, gstRate, taxAmount, total);
     },
 
-    // Supplier Outstandings
+    // Supplier Outstandings (delegates to append-only ledger sync)
     updateSupplierBalance: (supplierId, change) => {
-        db.prepare('UPDATE suppliers SET outstanding_balance = outstanding_balance + ? WHERE id = ?')
-          .run(change, supplierId);
+        if (change !== 0) {
+            const direction = change > 0 ? 'CREDIT' : 'DEBIT';
+            db.prepare(`
+                INSERT INTO supplier_ledger (
+                    supplier_id, entry_date, entry_type, amount, direction, source_type, source_id, reason, created_by
+                ) VALUES (?, CURRENT_DATE, 'MANUAL_CORRECTION', ?, ?, 'manual', NULL, 'Manual balance adjustment via repository', 'System')
+            `).run(supplierId, Math.abs(change), direction);
+
+            PurchasingService.syncSupplierBalance(supplierId, db);
+        }
     },
 
     // Purchase Returns
     createReturn: (poId, supplierId, itemId, qty, refund) => {
-        const stmt = db.prepare(`
-            INSERT INTO purchase_returns (po_id, supplier_id, item_id, qty_returned, refund_amount)
-            VALUES (?, ?, ?, ?, ?)
-        `);
-        const res = stmt.run(poId, supplierId, itemId, qty, refund);
-        return res.lastInsertRowid;
+        const res = PurchasingService.createPurchaseReturn({
+            po_id: poId,
+            supplier_id: supplierId,
+            item_id: itemId,
+            qty_returned: qty,
+            credit_amount: refund,
+            reason: 'Returned to supplier'
+        });
+        return res.returnId;
     },
 
     // Batches
@@ -116,3 +106,4 @@ const PORepository = {
 };
 
 module.exports = PORepository;
+
