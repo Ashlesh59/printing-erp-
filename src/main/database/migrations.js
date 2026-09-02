@@ -339,14 +339,18 @@ function runMigrations() {
         `);
 
         // 14. Performance Indexes & Composite Indexes
-        db.exec(`
-            CREATE INDEX IF NOT EXISTS idx_stock_location ON inventory_location_stock(item_id, location_id);
-            CREATE INDEX IF NOT EXISTS idx_reservations_order ON inventory_reservations(order_id);
-            CREATE INDEX IF NOT EXISTS idx_events_type ON inventory_events(event_type);
-            CREATE INDEX IF NOT EXISTS idx_recipes_pricing ON recipes(pricing_id);
-            CREATE INDEX IF NOT EXISTS idx_recipe_items_recipe ON recipe_items(recipe_id);
-            CREATE INDEX IF NOT EXISTS idx_batches_item ON inventory_batches(item_id);
-        `);
+        try {
+            db.exec(`
+                CREATE INDEX IF NOT EXISTS idx_stock_location ON inventory_location_stock(item_id, location_id);
+                CREATE INDEX IF NOT EXISTS idx_reservations_order ON inventory_reservations(order_id);
+                CREATE INDEX IF NOT EXISTS idx_events_type ON inventory_events(event_type);
+                CREATE INDEX IF NOT EXISTS idx_batches_item ON inventory_batches(item_id);
+            `);
+            try { db.exec(`CREATE INDEX IF NOT EXISTS idx_recipes_pricing ON recipes(pricing_id);`); } catch(e) {}
+            try { db.exec(`CREATE INDEX IF NOT EXISTS idx_recipe_items_recipe ON recipe_items(recipe_id);`); } catch(e) {}
+        } catch(e) {
+            console.warn('[Migration 3] Index warning:', e.message);
+        }
     });
 
     // Migration 4: Enterprise Print Engine Schema Upgrade
@@ -873,13 +877,15 @@ function runMigrations() {
             db.prepare("INSERT OR IGNORE INTO printer_groups (name, description) VALUES ('Color Printers', 'High quality color printing devices')").run();
             db.prepare("INSERT OR IGNORE INTO printer_groups (name, description) VALUES ('B&W Printers', 'Fast monochrome printing devices')").run();
 
-            db.exec(`
-                UPDATE print_profiles 
-                SET recipe_id = (SELECT id FROM recipes WHERE pricing_id = print_profiles.pricing_id LIMIT 1)
-                WHERE pricing_id IS NOT NULL
-            `);
+            try {
+                db.exec(`
+                    UPDATE print_profiles 
+                    SET recipe_id = (SELECT id FROM recipes WHERE product_id = print_profiles.product_id LIMIT 1)
+                    WHERE product_id IS NOT NULL
+                `);
+            } catch(e) {}
         } catch(seedErr) {
-            console.error("Failed to seed new Product and Print Profile tables:", seedErr);
+            console.warn("Notice: Product and Print Profile seeding notice:", seedErr.message);
         }
     });
 
@@ -1182,6 +1188,122 @@ function runMigrations() {
             }
         } catch (err) {
             console.error('[Migration 14] Error checking default credentials:', err);
+        }
+    });
+
+    // Migration 15: Local Order Lifecycle & State Machine Reconciliation
+    runMigration(15, "Phase 2 Local Order Lifecycle, Payments & Reconciliation Hardening", () => {
+        // 1. Add order tracking and payment columns
+        const orderCols = [
+            `ALTER TABLE orders ADD COLUMN submission_id TEXT`,
+            `ALTER TABLE orders ADD COLUMN payment_status TEXT DEFAULT 'Unpaid'`,
+            `ALTER TABLE orders ADD COLUMN customer_name_snapshot TEXT`,
+            `ALTER TABLE orders ADD COLUMN customer_phone_snapshot TEXT`,
+            `ALTER TABLE orders ADD COLUMN customer_gstin_snapshot TEXT`,
+            `ALTER TABLE orders ADD COLUMN subtotal REAL DEFAULT 0`,
+            `ALTER TABLE orders ADD COLUMN taxable_amount REAL DEFAULT 0`,
+            `ALTER TABLE orders ADD COLUMN gst_amount REAL DEFAULT 0`,
+            `ALTER TABLE orders ADD COLUMN discount_amount REAL DEFAULT 0`,
+            `ALTER TABLE orders ADD COLUMN paid_amount REAL DEFAULT 0`,
+            `ALTER TABLE orders ADD COLUMN unified_pdf_path TEXT`
+        ];
+        for (const colSql of orderCols) {
+            try { db.exec(colSql); } catch(e) {}
+        }
+
+        // 2. Add order items quantity and pricing snapshot columns
+        const orderItemCols = [
+            `ALTER TABLE order_items ADD COLUMN source_pages INTEGER DEFAULT 1`,
+            `ALTER TABLE order_items ADD COLUMN n_up INTEGER DEFAULT 1`,
+            `ALTER TABLE order_items ADD COLUMN physical_sheets INTEGER DEFAULT 1`,
+            `ALTER TABLE order_items ADD COLUMN logical_pages INTEGER DEFAULT 1`,
+            `ALTER TABLE order_items ADD COLUMN unit_price REAL DEFAULT 0`,
+            `ALTER TABLE order_items ADD COLUMN total_price REAL DEFAULT 0`,
+            `ALTER TABLE order_items ADD COLUMN checksum TEXT`
+        ];
+        for (const colSql of orderItemCols) {
+            try { db.exec(colSql); } catch(e) {}
+        }
+
+        // 3. Add GST invoice linking and payment status
+        const gstCols = [
+            `ALTER TABLE gst_invoices ADD COLUMN order_id INTEGER`,
+            `ALTER TABLE gst_invoices ADD COLUMN payment_status TEXT DEFAULT 'Unpaid'`,
+            `ALTER TABLE gst_invoices ADD COLUMN paid_amount REAL DEFAULT 0`
+        ];
+        for (const colSql of gstCols) {
+            try { db.exec(colSql); } catch(e) {}
+        }
+
+        // 4. Create dedicated Payments table for immutable payment records
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id INTEGER NOT NULL,
+                invoice_id INTEGER,
+                amount REAL NOT NULL,
+                payment_method TEXT NOT NULL DEFAULT 'Cash',
+                reference_number TEXT,
+                status TEXT NOT NULL DEFAULT 'Completed' CHECK (status IN ('Completed', 'Refunded', 'Voided')),
+                notes TEXT,
+                recorded_by TEXT DEFAULT 'Operator',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (order_id) REFERENCES orders (id) ON DELETE CASCADE,
+                FOREIGN KEY (invoice_id) REFERENCES gst_invoices (id) ON DELETE SET NULL
+            )
+        `);
+
+        // 5. Add print jobs retry and error tracking columns
+        const printJobCols = [
+            `ALTER TABLE print_jobs ADD COLUMN attempt_count INTEGER DEFAULT 1`,
+            `ALTER TABLE print_jobs ADD COLUMN retry_history_json TEXT`,
+            `ALTER TABLE print_jobs ADD COLUMN error_message TEXT`
+        ];
+        for (const colSql of printJobCols) {
+            try { db.exec(colSql); } catch(e) {}
+        }
+
+        // 6. Create indexes for performance and uniqueness
+        db.exec(`
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_submission_id ON orders(submission_id) WHERE submission_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_orders_payment_status ON orders(payment_status);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_gst_invoices_order_id ON gst_invoices(order_id) WHERE order_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_payments_order_id ON payments(order_id);
+            CREATE INDEX IF NOT EXISTS idx_payments_invoice_id ON payments(invoice_id);
+            CREATE INDEX IF NOT EXISTS idx_print_jobs_order_id ON print_jobs(order_id);
+        `);
+
+        // 7. Normalize legacy historical order & invoice states safely
+        try {
+            // Populate snapshots for existing orders with customers
+            db.exec(`
+                UPDATE orders 
+                SET customer_name_snapshot = (SELECT name FROM customers WHERE customers.id = orders.customer_id),
+                    customer_phone_snapshot = (SELECT phone FROM customers WHERE customers.id = orders.customer_id),
+                    customer_gstin_snapshot = (SELECT gstin FROM customers WHERE customers.id = orders.customer_id)
+                WHERE customer_id IS NOT NULL AND customer_name_snapshot IS NULL;
+            `);
+
+            // Normalize payment statuses based on order status
+            db.exec(`
+                UPDATE orders
+                SET payment_status = 'Paid', paid_amount = total_price
+                WHERE status = 'Completed' AND (payment_status IS NULL OR payment_status = 'Unpaid');
+            `);
+
+            db.exec(`
+                UPDATE orders
+                SET payment_status = 'Unpaid', paid_amount = 0
+                WHERE status IN ('Pending', 'Scheduled', 'Waiting', 'In Production', 'Ready') AND payment_status IS NULL;
+            `);
+
+            db.exec(`
+                UPDATE gst_invoices
+                SET payment_status = 'Paid', paid_amount = grand_total
+                WHERE status = 'Paid' AND (payment_status IS NULL OR payment_status = 'Unpaid');
+            `);
+        } catch (err) {
+            console.error('[Migration 15] Error normalizing legacy records:', err);
         }
     });
 }

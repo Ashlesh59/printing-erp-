@@ -125,20 +125,31 @@ function initDatabase() {
         )
     `);
 
-    // Orders Table (Unified Invoice Header)
+    // Orders Table (Authoritative Order Lifecycle & Payment State)
     db.exec(`
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            submission_id TEXT UNIQUE,
             customer_id INTEGER,
+            customer_name_snapshot TEXT,
+            customer_phone_snapshot TEXT,
+            customer_gstin_snapshot TEXT,
             total_price REAL DEFAULT 0,
-            status TEXT DEFAULT 'Pending',
+            subtotal REAL DEFAULT 0,
+            taxable_amount REAL DEFAULT 0,
+            gst_amount REAL DEFAULT 0,
+            discount_amount REAL DEFAULT 0,
+            paid_amount REAL DEFAULT 0,
+            status TEXT DEFAULT 'Confirmed' CHECK (status IN ('Draft', 'Confirmed', 'Scheduled', 'In Production', 'Ready', 'Completed', 'Cancelled', 'Declined', 'Pending', 'Waiting')),
+            payment_status TEXT DEFAULT 'Unpaid' CHECK (payment_status IN ('Unpaid', 'Partially Paid', 'Paid', 'Refunded', 'Voided')),
             notes TEXT,
+            unified_pdf_path TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (customer_id) REFERENCES customers (id)
+            FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE SET NULL
         )
     `);
 
-    // Order Items Table (Discrete files/print configurations)
+    // Order Items Table (Discrete files, precise page/sheet quantities, and pricing snapshots)
     db.exec(`
         CREATE TABLE IF NOT EXISTS order_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,13 +158,22 @@ function initDatabase() {
             file_path TEXT,
             print_type TEXT,
             paper_size TEXT,
-            sides TEXT,
+            sides TEXT DEFAULT 'Single',
+            source_pages INTEGER DEFAULT 1,
+            n_up INTEGER DEFAULT 1,
+            physical_sheets INTEGER DEFAULT 1,
+            logical_pages INTEGER DEFAULT 1,
             pages INTEGER DEFAULT 1,
             copies INTEGER DEFAULT 1,
+            unit_price REAL DEFAULT 0,
+            total_price REAL DEFAULT 0,
             price REAL DEFAULT 0,
             notes TEXT,
             paper_id INTEGER,
             extras_json TEXT,
+            product_id INTEGER,
+            print_profile_id INTEGER,
+            checksum TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (order_id) REFERENCES orders (id) ON DELETE CASCADE
         )
@@ -305,10 +325,11 @@ function initDatabase() {
             UNIQUE(device_name, windows_username)
         )
     `);
-    // GST Invoices Table
+    // GST Invoices Table (Decoupled Financial Records)
     db.exec(`
         CREATE TABLE IF NOT EXISTS gst_invoices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER UNIQUE,
             customer_id INTEGER,
             invoice_number TEXT UNIQUE NOT NULL,
             invoice_date DATE NOT NULL DEFAULT (date('now')),
@@ -318,9 +339,30 @@ function initDatabase() {
             igst_total REAL NOT NULL DEFAULT 0,
             grand_total REAL NOT NULL DEFAULT 0,
             state_type TEXT DEFAULT 'Local',
-            status TEXT DEFAULT 'Paid',
+            status TEXT DEFAULT 'Issued' CHECK (status IN ('Draft', 'Issued', 'Partially Paid', 'Paid', 'Cancelled', 'Refunded')),
+            payment_status TEXT DEFAULT 'Unpaid' CHECK (payment_status IN ('Unpaid', 'Partially Paid', 'Paid', 'Refunded', 'Voided')),
+            paid_amount REAL DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (customer_id) REFERENCES customers (id)
+            FOREIGN KEY (order_id) REFERENCES orders (id) ON DELETE SET NULL,
+            FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE SET NULL
+        )
+    `);
+
+    // Payments Table (Immutable Financial Ledger)
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            invoice_id INTEGER,
+            amount REAL NOT NULL,
+            payment_method TEXT NOT NULL DEFAULT 'Cash' CHECK (payment_method IN ('Cash', 'UPI', 'Card', 'Bank Transfer', 'Other')),
+            reference_number TEXT,
+            status TEXT NOT NULL DEFAULT 'Completed' CHECK (status IN ('Completed', 'Refunded', 'Voided')),
+            notes TEXT,
+            recorded_by TEXT DEFAULT 'Operator',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (order_id) REFERENCES orders (id) ON DELETE CASCADE,
+            FOREIGN KEY (invoice_id) REFERENCES gst_invoices (id) ON DELETE SET NULL
         )
     `);
 
@@ -665,11 +707,18 @@ function initDatabase() {
             order_id INTEGER,
             file_path TEXT,
             printer_name TEXT,
-            status TEXT DEFAULT 'queued',
+            status TEXT DEFAULT 'Queued' CHECK (status IN ('Not Queued', 'Queued', 'Preparing', 'Printing', 'Printed', 'Completed', 'Failed', 'Cancelled')),
             copies INTEGER DEFAULT 1,
             pages INTEGER DEFAULT 0,
+            attempt_count INTEGER DEFAULT 1,
+            retry_history_json TEXT,
             error TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            error_message TEXT,
+            duration_ms INTEGER,
+            is_simulated INTEGER DEFAULT 0,
+            finished_at DATETIME,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (order_id) REFERENCES orders (id) ON DELETE CASCADE
         )
     `);
 
@@ -701,27 +750,37 @@ function initDatabase() {
         )
     `);
 
-    // Create Performance Indexes for Foreign Keys and Search Columns
-    db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON orders(customer_id);
-        CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
-        CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
-        CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
-        CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);
-        CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name);
-        CREATE INDEX IF NOT EXISTS idx_production_jobs_status ON production_jobs(status);
-        CREATE INDEX IF NOT EXISTS idx_production_jobs_scheduled ON production_jobs(scheduled_start);
-        CREATE INDEX IF NOT EXISTS idx_gst_invoices_customer_id ON gst_invoices(customer_id);
-        CREATE INDEX IF NOT EXISTS idx_stock_transactions_item_id ON stock_transactions(item_id);
-        CREATE INDEX IF NOT EXISTS idx_inventory_items_category_id ON inventory_items(category_id);
-    `);
-
     // Execute Enterprise Migration manager
     try {
         const { runMigrations } = require('./migrations');
         runMigrations();
     } catch (err) {
         console.error("Critical database migration failure:", err);
+    }
+
+    // Create Performance Indexes for Foreign Keys and Search Columns
+    try {
+        db.exec(`
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_submission_id ON orders(submission_id) WHERE submission_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON orders(customer_id);
+            CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+            CREATE INDEX IF NOT EXISTS idx_orders_payment_status ON orders(payment_status);
+            CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
+            CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
+            CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);
+            CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name);
+            CREATE INDEX IF NOT EXISTS idx_production_jobs_status ON production_jobs(status);
+            CREATE INDEX IF NOT EXISTS idx_production_jobs_scheduled ON production_jobs(scheduled_start);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_gst_invoices_order_id ON gst_invoices(order_id) WHERE order_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_gst_invoices_customer_id ON gst_invoices(customer_id);
+            CREATE INDEX IF NOT EXISTS idx_payments_order_id ON payments(order_id);
+            CREATE INDEX IF NOT EXISTS idx_payments_invoice_id ON payments(invoice_id);
+            CREATE INDEX IF NOT EXISTS idx_print_jobs_order_id ON print_jobs(order_id);
+            CREATE INDEX IF NOT EXISTS idx_stock_transactions_item_id ON stock_transactions(item_id);
+            CREATE INDEX IF NOT EXISTS idx_inventory_items_category_id ON inventory_items(category_id);
+        `);
+    } catch(idxErr) {
+        console.warn("Index creation notice:", idxErr.message);
     }
 
     try {

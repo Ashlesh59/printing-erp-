@@ -450,22 +450,24 @@ class PrintQueueManager {
         }
     }
 
-    async enqueue(orderId, printerName, filePath, pages, copies, options) {
+    async enqueue(orderId, printerName, filePath, pages, copies, options = {}) {
         return new Promise(async (resolve, reject) => {
-            let jobId;
+            let jobId = options.printJobId || null;
             let auditLogId;
             try {
-                const customerId = options.customerId || options.customer_id || null;
-                const paperSize = options.paperSize || options.paper_size || null;
-                const colorMode = options.printType || options.color_mode || null;
-                const duplex = options.sides || options.duplex || null;
+                if (!jobId) {
+                    const customerId = options.customerId || options.customer_id || null;
+                    const paperSize = options.paperSize || options.paper_size || null;
+                    const colorMode = options.printType || options.color_mode || null;
+                    const duplex = options.sides || options.duplex || null;
 
-                const stmt = db.prepare(`
-                    INSERT INTO print_jobs (order_id, customer_id, printer_name, file_path, pages, copies, paper_size, color_mode, duplex, status, started_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Queued', CURRENT_TIMESTAMP)
-                `);
-                const res = stmt.run(orderId || null, customerId, printerName || 'Default', filePath, pages, copies, paperSize, colorMode, duplex);
-                jobId = res.lastInsertRowid;
+                    const stmt = db.prepare(`
+                        INSERT INTO print_jobs (order_id, customer_id, printer_name, file_path, pages, copies, paper_size, color_mode, duplex, status, started_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Queued', CURRENT_TIMESTAMP)
+                    `);
+                    const res = stmt.run(orderId || null, customerId, printerName || 'Default', filePath, pages, copies, paperSize, colorMode, duplex);
+                    jobId = res.lastInsertRowid;
+                }
 
                 // Create reprint snapshot audit entry
                 const profileId = options.printProfileId || null;
@@ -634,10 +636,20 @@ class PrintQueueManager {
 
                 const durationMs = Date.now() - startTime;
                 if (job.id) {
-                    db.prepare(`UPDATE print_jobs SET status = 'Completed', duration_ms = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?`).run(durationMs, job.id);
+                    db.prepare(`UPDATE print_jobs SET status = 'Printed', duration_ms = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?`).run(durationMs, job.id);
                 }
                 if (job.auditId) {
                     db.prepare(`UPDATE print_audit_logs SET status = 'Completed', duration_ms = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?`).run(durationMs, job.auditId);
+                }
+                
+                // Update linked order & production status without mutating payment
+                if (job.orderId) {
+                    try {
+                        db.prepare("UPDATE production_jobs SET status = 'Ready', actual_completion = CURRENT_TIMESTAMP WHERE order_id = ? AND status NOT IN ('Completed', 'Delivered', 'Cancelled')").run(job.orderId);
+                        db.prepare("UPDATE orders SET status = 'Ready' WHERE id = ? AND status IN ('Confirmed', 'In Production', 'Waiting')").run(job.orderId);
+                    } catch (e) {
+                        console.error("Failed to update order/production status on print complete:", e);
+                    }
                 }
                 
                 eventBus.publish(EventTypes.PRINTER_JOB_COMPLETED, { jobId: job.id, printerName: job.printerName, pages: job.pages, copies: job.copies, orderId: job.orderId }, { sourceModule: 'PrinterService' });
@@ -661,10 +673,20 @@ class PrintQueueManager {
             
             const durationMs = Date.now() - startTime;
             if (job.id) {
-                db.prepare(`UPDATE print_jobs SET status = 'Completed', duration_ms = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?`).run(durationMs, job.id);
+                db.prepare(`UPDATE print_jobs SET status = 'Printed', duration_ms = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?`).run(durationMs, job.id);
             }
             if (job.auditId) {
                 db.prepare(`UPDATE print_audit_logs SET status = 'Completed', duration_ms = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?`).run(durationMs, job.auditId);
+            }
+            
+            // Update linked order & production status without mutating payment
+            if (job.orderId) {
+                try {
+                    db.prepare("UPDATE production_jobs SET status = 'Ready', actual_completion = CURRENT_TIMESTAMP WHERE order_id = ? AND status NOT IN ('Completed', 'Delivered', 'Cancelled')").run(job.orderId);
+                    db.prepare("UPDATE orders SET status = 'Ready' WHERE id = ? AND status IN ('Confirmed', 'In Production', 'Waiting')").run(job.orderId);
+                } catch (e) {
+                    console.error("Failed to update order/production status on print complete:", e);
+                }
             }
             
             eventBus.publish(EventTypes.PRINTER_JOB_COMPLETED, { jobId: job.id, printerName: job.printerName, pages: job.pages, copies: job.copies, orderId: job.orderId }, { sourceModule: 'PrinterService' });
@@ -804,16 +826,24 @@ function printFile(payload, printerName, options) {
             resolve(res);
         } catch (error) {
             try {
-                const customerId = options.customerId || options.customer_id || null;
-                const paperSize = options.paperSize || options.paper_size || null;
-                const colorMode = options.printType || options.color_mode || null;
-                const duplex = options.sides || options.duplex || null;
+                if (options.printJobId) {
+                    db.prepare(`
+                        UPDATE print_jobs 
+                        SET status = 'Failed', error_message = ?, finished_at = CURRENT_TIMESTAMP 
+                        WHERE id = ?
+                    `).run(error.message || String(error), options.printJobId);
+                } else {
+                    const customerId = options.customerId || options.customer_id || null;
+                    const paperSize = options.paperSize || options.paper_size || null;
+                    const colorMode = options.printType || options.color_mode || null;
+                    const duplex = options.sides || options.duplex || null;
 
-                const stmt = db.prepare(`
-                    INSERT INTO print_jobs (order_id, customer_id, printer_name, file_path, pages, copies, paper_size, color_mode, duplex, status, error_message, started_at, finished_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Failed', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                `);
-                stmt.run(options.orderId || null, customerId, printerName || 'Default', 'Generation Phase', 0, options.copies || 1, paperSize, colorMode, duplex, error.message || String(error));
+                    const stmt = db.prepare(`
+                        INSERT INTO print_jobs (order_id, customer_id, printer_name, file_path, pages, copies, paper_size, color_mode, duplex, status, error_message, started_at, finished_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Failed', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    `);
+                    stmt.run(options.orderId || null, customerId, printerName || 'Default', 'Generation Phase', 0, options.copies || 1, paperSize, colorMode, duplex, error.message || String(error));
+                }
             } catch(dbErr) {
                 console.error("Failed to write print job error log:", dbErr);
             }

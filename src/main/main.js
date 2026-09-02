@@ -343,8 +343,36 @@ function createWindow() {
     // ==========================================
     // ORDER MANAGEMENT (OPERATOR+)
     // ==========================================
+    const OrderService = require('./services/order-service');
+    const PricingEngine = require('./services/pricing-engine');
+    const ReconciliationService = require('./services/reconciliation-service');
+
+    // Run Startup Reconciliation
+    ReconciliationService.runStartupReconciliation();
+
+    registerGuardedHandler('orders:submit', ROLES.CUSTOMER, (event, data) => {
+      return OrderService.submitOrder(event.sender, data);
+    });
+
+    registerGuardedHandler('orders:cancel', ROLES.OPERATOR, (event, { orderId, reason }) => {
+      return OrderService.cancelOrder(event.sender, orderId, reason);
+    });
+
+    registerGuardedHandler('orders:retry-print', ROLES.OPERATOR, (event, { orderId, options }) => {
+      return OrderService.retryPrint(event.sender, orderId, options);
+    });
+
+    registerGuardedHandler('orders:record-payment', ROLES.OPERATOR, (event, data) => {
+      return OrderService.recordPayment(event.sender, data);
+    });
+
+    registerGuardedHandler('orders:calculate-pricing', ROLES.OPERATOR, (event, { items, options }) => {
+      return PricingEngine.calculateOrderPricing(items, options);
+    });
+
+    // Backwards-compatible create-order handler
     registerGuardedHandler('create-order', ROLES.OPERATOR, (event, data) => {
-      return OrderModel.createOrder(data);
+      return OrderService.submitOrder(event.sender, data);
     });
 
     registerGuardedHandler('get-order-item-specifications', ROLES.OPERATOR, (event, orderItemId) => {

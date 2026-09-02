@@ -443,34 +443,12 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    async function executeSave(status, scheduleDetails = null) {
+    async function executeSave(action = 'SAVE', scheduleDetails = null, paymentDetails = null) {
         const cfg = getActiveConfig();
-        const customerId = await ensureCustomer();
         
         const printType = cfg.print_color_mode || cfg.printType;
         const paperSize = cfg.print_paper_size || cfg.paperSize;
         const sides = cfg.print_duplex || cfg.sides;
-
-        let pdfBytes;
-        if (window.currentDocStudioOutput) {
-            const resp = await fetch(`app-file:///${window.currentDocStudioOutput.filePath.replace(/\\/g, '/')}`);
-            const buf = await resp.arrayBuffer();
-            pdfBytes = new Uint8Array(buf);
-        } else {
-            const layoutNUpEl = document.getElementById('layout-images-per-page');
-            const layoutNUpVal = layoutNUpEl ? (parseInt(layoutNUpEl.value) || 1) : 1;
-            const pdfResult = await window.api.generateUnifiedPdf(getPrintPayload(), {
-                printType,
-                copies: cfg.copies,
-                sides,
-                nUp: layoutNUpVal,
-                paperSize,
-                pageRange: cfg.pageRange || '',
-                isPdf: true
-            });
-            if (!pdfResult.success) throw new Error("Failed to generate PDF: " + pdfResult.error);
-            pdfBytes = pdfResult.pdfBytes;
-        }
 
         const activeFiles = getActiveFilesList();
         let fileItemsRaw = [];
@@ -513,96 +491,51 @@ document.addEventListener('DOMContentLoaded', () => {
                 pages: 1
             }];
         }
-        
-        const totalPrintedPages = fileItemsRaw.reduce((sum, item) => {
-            if ((item.filePath || '').endsWith('.pdf')) {
-                return sum + item.pages;
-            }
-            return sum;
-        }, 0);
-        
+
         const layoutNUpEl = document.getElementById('layout-images-per-page');
         const layoutNUpVal = layoutNUpEl ? (parseInt(layoutNUpEl.value) || 1) : 1;
 
-        const imageCount = fileItemsRaw.filter(item => !(item.filePath || '').endsWith('.pdf')).length;
-        const imagePages = Math.ceil(imageCount / layoutNUpVal);
-        const totalPages = totalPrintedPages + imagePages;
+        const items = fileItemsRaw.map(fileItem => ({
+            fileName: fileItem.fileName,
+            filePath: fileItem.filePath,
+            printType: printType,
+            paperSize: paperSize,
+            sides: sides,
+            sourcePages: fileItem.pages,
+            pages: fileItem.pages,
+            nUp: layoutNUpVal,
+            copies: cfg.copies || 1,
+            paperId: cfg.paper ? cfg.paper.id : null,
+            product_id: cfg.product_id || null,
+            print_profile_id: cfg.print_profile_id || null,
+            specifications: cfg.specifications || {},
+            extras: cfg.extras ? cfg.extras.map(e => e.id || e) : []
+        }));
 
-        const paperPrice = cfg.paper ? cfg.paper.price : 0;
-        const totalExtrasCost = (cfg.extras || []).reduce((sum, ext) => sum + (ext.price || 0), 0);
-        const copies = cfg.copies || 1;
-
-        const items = fileItemsRaw.map(fileItem => {
-            const isPdf = (fileItem.filePath || '').endsWith('.pdf');
-            const itemPrintedPages = isPdf ? fileItem.pages : (1 / layoutNUpVal);
-            
-            let itemPrice = (itemPrintedPages * paperPrice + (totalExtrasCost / fileItemsRaw.length)) * copies;
-            if (cfg.product_id) {
-                itemPrice = cfg.calculatedPrice / Math.max(1, fileItemsRaw.length);
-            }
-
-            const notesStr = cfg.product_id 
-                ? Object.entries(cfg.specifications || {}).map(([k, v]) => `${k}: ${v}`).join(', ')
-                : `Unified Engine. N-up: ${layoutNUpVal}`;
-
-            return {
-                fileName: fileItem.fileName,
-                filePath: fileItem.filePath,
-                printType: printType,
-                paperSize: paperSize,
-                sides: sides,
-                pages: Math.max(1, Math.round(itemPrintedPages)),
-                copies: copies,
-                price: itemPrice,
-                notes: notesStr,
-                paperId: cfg.paper ? cfg.paper.id : null,
-                product_id: cfg.product_id || null,
-                print_profile_id: cfg.print_profile_id || null,
-                specifications: cfg.specifications || {},
-                extras: cfg.extras ? cfg.extras.map(e => e.id || e) : []
-            };
-        });
-
-        const sumItemPrices = items.reduce((sum, item) => sum + item.price, 0);
-        const diff = cfg.calculatedPrice - sumItemPrices;
-        if (Math.abs(diff) > 0.001 && items.length > 0) {
-            items[items.length - 1].price += diff;
-        }
+        const submissionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('sub_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9));
 
         const orderData = {
-            customerId: customerId,
-            status: status,
+            submissionId: submissionId,
+            action: action, // 'SAVE' | 'SAVE_AND_PRINT' | 'SCHEDULE'
+            customerName: cfg.name || 'Walk-in Customer',
+            customerPhone: cfg.phone || '',
+            customerGstin: document.getElementById('setup-gstin')?.value.trim() || '',
+            state: document.getElementById('setup-state')?.value || 'Local',
+            default_printer: cfg.default_printer || 'Default',
+            items: items,
+            payment: paymentDetails || { amount: 0, method: 'Cash' },
+            scheduleDetails: scheduleDetails,
             notes: cfg.product_id 
                 ? Object.entries(cfg.specifications || {}).map(([k, v]) => `${k}: ${v}`).join(', ')
-                : `Unified Engine. N-up: ${layoutNUpVal}`,
-            gstin: document.getElementById('setup-gstin')?.value.trim() || '',
-            state: document.getElementById('setup-state')?.value || 'Local',
-            items: items,
-            scheduleDetails: scheduleDetails,
-            scheduledStart: scheduleDetails?.scheduledStart || null,
-            dueTime: scheduleDetails?.dueTime || null,
-            operator: scheduleDetails?.operator || null,
-            priority: scheduleDetails?.priority || null
+                : `Unified Engine. N-up: ${layoutNUpVal}`
         };
 
-        const orderResult = await window.api.createOrder(orderData);
-        if (!orderResult.success) throw new Error("Failed to save order to DB: " + orderResult.error);
+        const result = await (window.api.submitOrder ? window.api.submitOrder(orderData) : window.api.createOrder(orderData));
+        if (!result || !result.success) {
+            throw new Error(result ? result.error : 'Order submission failed');
+        }
 
-        const orderId = orderResult.id;
-        
-        const originalFilePaths = fileItemsRaw.map(fi => fi.filePath);
-        
-        const saveResult = await window.api.saveOrderFiles(
-            cfg.name, 
-            cfg.phone, 
-            orderId, 
-            pdfBytes,
-            originalFilePaths
-        );
-        
-        if (!saveResult.success) throw new Error("Failed to save file to disk: " + saveResult.error);
-        
-        return true;
+        return result;
     }
 
     window.clearWorkspace = function() {
@@ -892,39 +825,21 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             try {
-                await executeSave('Waiting');
+                const res = await executeSave('SAVE_AND_PRINT');
 
-                if (bannerText) bannerText.textContent = 'Spooling print job to printer...';
-
-                const printResult = await executePrint();
-
-                if (printResult && printResult.success) {
+                if (res && res.success) {
                     if (banner && bannerText) {
                         banner.className = 'comp-status-banner success';
                         if (spinner) spinner.style.display = 'none';
-                        bannerText.textContent = '✅ Order Saved, Invoiced & Sent to Printer!';
+                        bannerText.textContent = '✅ Order Saved, Invoiced & Print Queued!';
                     }
-                    if (window.showToast) window.showToast('Order saved to database & sent to printer!', 'success');
+                    if (window.showToast) window.showToast('Order saved to database & print job queued!', 'success');
 
                     if (window.refreshAllWorkspaces) window.refreshAllWorkspaces();
                     cleanupAfterSuccess();
                     btnActionSavePrint.disabled = false;
                 } else {
-                    const err = printResult ? printResult.error : 'Printer hardware offline';
-                    if (banner && bannerText) {
-                        banner.className = 'comp-status-banner error';
-                        if (spinner) spinner.style.display = 'none';
-                        bannerText.textContent = '⚠️ Printer Offline. Opening Diagnostic Modal...';
-                    }
-                    btnActionSavePrint.disabled = false;
-                    const cfg = getActiveConfig();
-                    window.showPrinterErrorModal(err, getPrintPayload(), {
-                        printerName: cfg.default_printer || 'Default',
-                        printType: cfg.print_color_mode || cfg.printType,
-                        paperSize: cfg.print_paper_size || cfg.paperSize,
-                        sides: cfg.print_duplex || cfg.sides,
-                        copies: cfg.copies || 1
-                    });
+                    throw new Error(res ? res.error : 'Order save failed');
                 }
             } catch (e) {
                 const isCancelled = e.message && (
@@ -1117,7 +1032,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else {
                     console.log('[Schedule] Creating new scheduled order via executeSave...');
                     if (typeof executeSave !== 'function') throw new Error('executeSave function is missing');
-                    await executeSave('Waiting', scheduleData);
+                    await executeSave('SCHEDULE', scheduleData);
                 }
 
                 if (typeof window.refreshAllWorkspaces === 'function') window.refreshAllWorkspaces();
