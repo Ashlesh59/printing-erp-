@@ -673,10 +673,10 @@ class PrintQueueManager {
             
             const durationMs = Date.now() - startTime;
             if (job.id) {
-                db.prepare(`UPDATE print_jobs SET status = 'Printed', duration_ms = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?`).run(durationMs, job.id);
+                db.prepare(`UPDATE print_jobs SET status = 'Submitted', duration_ms = ?, submitted_at = CURRENT_TIMESTAMP, finished_at = CURRENT_TIMESTAMP WHERE id = ?`).run(durationMs, job.id);
             }
             if (job.auditId) {
-                db.prepare(`UPDATE print_audit_logs SET status = 'Completed', duration_ms = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?`).run(durationMs, job.auditId);
+                db.prepare(`UPDATE print_audit_logs SET status = 'Submitted', duration_ms = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?`).run(durationMs, job.auditId);
             }
             
             // Update linked order & production status without mutating payment
@@ -737,63 +737,113 @@ class PrintQueueManager {
     }
 
     executePrint(job) {
-        return new Promise((resolve, reject) => {
-            let printWindow = new BrowserWindow({
-                show: false,
-                webPreferences: {
-                    nodeIntegration: true,
-                    contextIsolation: false,
-                    webSecurity: false
+        return new Promise(async (resolve, reject) => {
+            const PrintSettings = require('./services/printing/print-settings');
+            const printerInfo = await getPrinterCapabilities(job.printerName);
+            const mapping = PrintSettings.mapToElectronPrintOptions(
+                { ...job.options, printerDeviceName: job.printerName, copies: job.copies },
+                printerInfo,
+                job.pages || 1
+            );
+
+            // Update database with settings snapshot and transition to Rendering
+            if (job.id) {
+                db.prepare(`
+                    UPDATE print_jobs 
+                    SET status = 'Rendering', 
+                        settings_snapshot_json = ?,
+                        started_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                `).run(mapping.snapshotJson, job.id);
+            }
+
+            let printWindow = null;
+            let isCleanedUp = false;
+            let renderTimeoutTimer = null;
+
+            const cleanup = () => {
+                if (isCleanedUp) return;
+                isCleanedUp = true;
+                if (renderTimeoutTimer) clearTimeout(renderTimeoutTimer);
+                ipcMain.removeListener('print-render-complete', onComplete);
+                ipcMain.removeListener('print-render-failed', onFailed);
+                if (printWindow && !printWindow.isDestroyed()) {
+                    try { printWindow.destroy(); } catch(e) {}
+                    printWindow = null;
                 }
-            });
+            };
 
             const onComplete = (event) => {
-                if (event.sender === printWindow.webContents) {
-                    cleanup();
-                    
-                    const printOptions = {
-                        silent: job.options.silent !== undefined ? job.options.silent : true,
-                        color: job.options.printType === 'color',
-                        copies: job.copies || 1,
-                        duplexMode: job.options.sides === 'Double' ? 'longEdge' : 'simplex'
-                    };
-                    
-                    if (job.printerName && job.printerName !== 'Default') {
-                        printOptions.deviceName = job.printerName;
-                    }
-
-                    printWindow.webContents.print(printOptions, (success, failureReason) => {
-                        printWindow.close();
-                        if (success) {
-                            resolve();
-                        } else {
-                            reject(new Error(failureReason || "Local print spooler error"));
-                        }
-                    });
+                if (!printWindow || event.sender !== printWindow.webContents) return;
+                
+                // Transition to Submitting state
+                if (job.id) {
+                    db.prepare("UPDATE print_jobs SET status = 'Submitting' WHERE id = ?").run(job.id);
                 }
+
+                printWindow.webContents.print(mapping.electronOptions, (success, failureReason) => {
+                    cleanup();
+                    if (success) {
+                        resolve({ success: true, status: 'Submitted' });
+                    } else {
+                        const errMsg = failureReason || "Print spooler rejected job";
+                        reject(new Error(errMsg));
+                    }
+                });
             };
 
             const onFailed = (event, errorMsg) => {
-                if (event.sender === printWindow.webContents) {
-                    cleanup();
-                    printWindow.close();
-                    reject(new Error(errorMsg));
-                }
-            };
-
-            const cleanup = () => {
-                ipcMain.removeListener('print-render-complete', onComplete);
-                ipcMain.removeListener('print-render-failed', onFailed);
+                if (!printWindow || event.sender !== printWindow.webContents) return;
+                cleanup();
+                reject(new Error(errorMsg || 'Worker rendering failed'));
             };
 
             ipcMain.on('print-render-complete', onComplete);
             ipcMain.on('print-render-failed', onFailed);
 
-            printWindow.loadFile(path.join(__dirname, 'print-worker.html'));
+            // Safety timeout (45 seconds)
+            renderTimeoutTimer = setTimeout(() => {
+                if (!isCleanedUp) {
+                    cleanup();
+                    reject(new Error('Print rendering timed out after 45 seconds'));
+                }
+            }, 45000);
 
-            printWindow.webContents.on('did-finish-load', () => {
-                printWindow.webContents.send('render-pdf', job.filePath, { printType: job.options.printType });
-            });
+            try {
+                const preloadPath = path.join(__dirname, '..', 'preload', 'print-worker-preload.js');
+                printWindow = new BrowserWindow({
+                    show: false,
+                    webPreferences: {
+                        nodeIntegration: false,
+                        contextIsolation: true,
+                        sandbox: true,
+                        webSecurity: true,
+                        preload: preloadPath
+                    }
+                });
+
+                printWindow.webContents.on('did-finish-load', () => {
+                    let pdfBuffer = null;
+                    if (job.filePath && fs.existsSync(job.filePath)) {
+                        pdfBuffer = fs.readFileSync(job.filePath);
+                    }
+                    printWindow.webContents.send('render-task', {
+                        pdfBuffer,
+                        filePath: job.filePath,
+                        options: job.options
+                    });
+                });
+
+                printWindow.webContents.on('render-process-gone', (_event, details) => {
+                    cleanup();
+                    reject(new Error(`Print worker crashed: ${details.reason}`));
+                });
+
+                printWindow.loadFile(path.join(__dirname, 'print-worker.html'));
+            } catch (winErr) {
+                cleanup();
+                reject(winErr);
+            }
         });
     }
 }

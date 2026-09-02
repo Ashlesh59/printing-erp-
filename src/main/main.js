@@ -530,14 +530,39 @@ function createWindow() {
       return WizardModel.executeWizardSetup(data);
     });
 
+    // ==========================================
+    // PHASE 3 PRINTING & HARDWARE IPC HANDLERS
+    // ==========================================
+    const PrinterDiscovery = require('./services/printing/printer-discovery');
+    const PrintQueueManager = require('./services/printing/print-queue-manager');
+    const PrintDiagnosticsService = require('./services/printing/print-diagnostics-service');
+
     registerGuardedHandler('get-printers', ROLES.OPERATOR, async () => {
-      try {
-        const targetWin = BrowserWindow.getAllWindows()[0];
-        return targetWin ? await targetWin.webContents.getPrintersAsync() : [];
-      } catch (err) {
-        console.error("[Main] Error fetching system printers:", err);
-        return [];
-      }
+      return await PrinterDiscovery.getPrinters();
+    });
+
+    registerGuardedHandler('printers:list', ROLES.OPERATOR, async (event, { forceRefresh = false } = {}) => {
+      return await PrinterDiscovery.getPrinters(forceRefresh);
+    });
+
+    registerGuardedHandler('printers:get-capabilities', ROLES.OPERATOR, async (event, { printerName }) => {
+      return await PrinterDiscovery.getCapabilities(printerName);
+    });
+
+    registerGuardedHandler('printers:get-diagnostics', ROLES.ADMIN, async () => {
+      return await PrintDiagnosticsService.getDiagnostics();
+    });
+
+    registerGuardedHandler('printers:test-print', ROLES.ADMIN, async (event, { printerName } = {}) => {
+      return await PrintDiagnosticsService.runTestPrint(printerName);
+    });
+
+    registerGuardedHandler('printers:get-queue-status', ROLES.OPERATOR, () => {
+      return PrintQueueManager.getQueueStatus();
+    });
+
+    registerGuardedHandler('printers:cancel-job', ROLES.OPERATOR, (event, { jobId, reason } = {}) => {
+      return PrintQueueManager.cancelJob(jobId, reason);
     });
 
     // ==========================================
@@ -1016,6 +1041,14 @@ app.whenReady().then(() => {
 
   setupCloudIPC();
   initCloudSync(win);
+
+  // Phase 3: Startup persistent print queue crash recovery
+  try {
+    const PrintQueueManager = require('./services/printing/print-queue-manager');
+    PrintQueueManager.recoverStaleJobsOnStartup();
+  } catch (err) {
+    console.error("[Startup] Print queue recovery error:", err);
+  }
 
   // Discover and cache printers on startup
   DeviceManager.discoverPrinters().catch(err => {

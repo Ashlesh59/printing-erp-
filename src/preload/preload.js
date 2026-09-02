@@ -241,5 +241,13 @@ contextBridge.exposeInMainWorld('api', {
   // Window Fullscreen Controls
   toggleFullScreen: () => ipcRenderer.invoke('toggle-fullscreen'),
   setFullScreen: (flag) => ipcRenderer.invoke('set-fullscreen', flag),
-  isFullScreen: () => ipcRenderer.invoke('is-fullscreen')
+  isFullScreen: () => ipcRenderer.invoke('is-fullscreen'),
+
+  // Phase 3 Hardware & Printing Diagnostics
+  listPrinters: (forceRefresh = false) => ipcRenderer.invoke('printers:list', { forceRefresh }),
+  getPrinterCapabilities: (printerName) => ipcRenderer.invoke('printers:get-capabilities', { printerName }),
+  getPrintDiagnostics: () => ipcRenderer.invoke('printers:get-diagnostics'),
+  runTestPrint: (printerName) => ipcRenderer.invoke('printers:test-print', { printerName }),
+  getPrintQueueStatus: () => ipcRenderer.invoke('printers:get-queue-status'),
+  cancelPrintJob: (jobId, reason) => ipcRenderer.invoke('printers:cancel-job', { jobId, reason })
 });

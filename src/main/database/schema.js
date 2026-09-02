@@ -705,20 +705,35 @@ function initDatabase() {
         CREATE TABLE IF NOT EXISTS print_jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             order_id INTEGER,
-            file_path TEXT,
+            customer_id INTEGER,
             printer_name TEXT,
-            status TEXT DEFAULT 'Queued' CHECK (status IN ('Not Queued', 'Queued', 'Preparing', 'Printing', 'Printed', 'Completed', 'Failed', 'Cancelled')),
+            printer_device_name TEXT,
+            file_path TEXT,
+            status TEXT DEFAULT 'Queued' CHECK (status IN ('Queued', 'Preparing', 'Rendering', 'Submitting', 'Submitted', 'Confirmed Printed', 'Failed', 'Cancelled', 'Uncertain')),
             copies INTEGER DEFAULT 1,
             pages INTEGER DEFAULT 0,
+            paper_size TEXT,
+            color_mode TEXT,
+            duplex TEXT,
+            scaling_mode TEXT DEFAULT 'fit',
             attempt_count INTEGER DEFAULT 1,
+            settings_snapshot_json TEXT,
+            preflight_checksum TEXT,
             retry_history_json TEXT,
+            attempt_history_json TEXT,
+            locked_by TEXT,
+            locked_at DATETIME,
+            submitted_at DATETIME,
+            completed_at DATETIME,
+            finished_at DATETIME,
+            started_at DATETIME,
             error TEXT,
             error_message TEXT,
             duration_ms INTEGER,
             is_simulated INTEGER DEFAULT 0,
-            finished_at DATETIME,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (order_id) REFERENCES orders (id) ON DELETE CASCADE
+            FOREIGN KEY (order_id) REFERENCES orders (id) ON DELETE CASCADE,
+            FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE SET NULL
         )
     `);
 
@@ -776,6 +791,9 @@ function initDatabase() {
             CREATE INDEX IF NOT EXISTS idx_payments_order_id ON payments(order_id);
             CREATE INDEX IF NOT EXISTS idx_payments_invoice_id ON payments(invoice_id);
             CREATE INDEX IF NOT EXISTS idx_print_jobs_order_id ON print_jobs(order_id);
+            CREATE INDEX IF NOT EXISTS idx_print_jobs_status ON print_jobs(status);
+            CREATE INDEX IF NOT EXISTS idx_print_jobs_printer_device_name ON print_jobs(printer_device_name);
+            CREATE INDEX IF NOT EXISTS idx_print_jobs_locked_by ON print_jobs(locked_by);
             CREATE INDEX IF NOT EXISTS idx_stock_transactions_item_id ON stock_transactions(item_id);
             CREATE INDEX IF NOT EXISTS idx_inventory_items_category_id ON inventory_items(category_id);
         `);

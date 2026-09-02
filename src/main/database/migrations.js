@@ -381,7 +381,7 @@ function runMigrations() {
                 file_path TEXT NOT NULL,
                 pages INTEGER DEFAULT 1,
                 copies INTEGER DEFAULT 1,
-                status TEXT NOT NULL DEFAULT 'Queued' CHECK (status IN ('Queued', 'Preparing', 'Printing', 'Completed', 'Cancelled', 'Failed')),
+                status TEXT NOT NULL DEFAULT 'Queued' CHECK (status IN ('Queued', 'Preparing', 'Rendering', 'Submitting', 'Submitted', 'Confirmed Printed', 'Failed', 'Cancelled', 'Uncertain')),
                 retry_count INTEGER DEFAULT 0,
                 error_message TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -824,7 +824,7 @@ function runMigrations() {
                 copies INTEGER DEFAULT 1,
                 inventory_used_json TEXT,
                 duration_ms INTEGER,
-                status TEXT NOT NULL DEFAULT 'Queued' CHECK (status IN ('Queued', 'Preparing', 'Printing', 'Completed', 'Cancelled', 'Failed')),
+                status TEXT NOT NULL DEFAULT 'Queued' CHECK (status IN ('Queued', 'Preparing', 'Printing', 'Submitted', 'Confirmed Printed', 'Completed', 'Cancelled', 'Failed', 'Uncertain')),
                 error_message TEXT,
                 is_simulated INTEGER DEFAULT 0,
                 started_at DATETIME,
@@ -1304,6 +1304,94 @@ function runMigrations() {
             `);
         } catch (err) {
             console.error('[Migration 15] Error normalizing legacy records:', err);
+        }
+    });
+
+    // Migration 16: Phase 3 Physical Printing Engine Hardening & Truthful State Machine
+    runMigration(16, "Phase 3 Physical Printing Engine Hardening & Concurrency", () => {
+        try {
+            const tableInfo = db.prepare("PRAGMA table_info(print_jobs)").all();
+            const cols = new Set(tableInfo.map(c => c.name));
+
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS print_jobs_v16 (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id INTEGER,
+                    customer_id INTEGER,
+                    printer_name TEXT,
+                    printer_device_name TEXT,
+                    file_path TEXT,
+                    status TEXT DEFAULT 'Queued' CHECK (status IN ('Queued', 'Preparing', 'Rendering', 'Submitting', 'Submitted', 'Confirmed Printed', 'Failed', 'Cancelled', 'Uncertain')),
+                    copies INTEGER DEFAULT 1,
+                    pages INTEGER DEFAULT 0,
+                    paper_size TEXT,
+                    color_mode TEXT,
+                    duplex TEXT,
+                    scaling_mode TEXT DEFAULT 'fit',
+                    attempt_count INTEGER DEFAULT 1,
+                    settings_snapshot_json TEXT,
+                    preflight_checksum TEXT,
+                    retry_history_json TEXT,
+                    attempt_history_json TEXT,
+                    locked_by TEXT,
+                    locked_at DATETIME,
+                    submitted_at DATETIME,
+                    completed_at DATETIME,
+                    finished_at DATETIME,
+                    started_at DATETIME,
+                    error TEXT,
+                    error_message TEXT,
+                    duration_ms INTEGER,
+                    is_simulated INTEGER DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (order_id) REFERENCES orders (id) ON DELETE CASCADE,
+                    FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE SET NULL
+                );
+            `);
+
+            const customerIdCol = cols.has('customer_id') ? 'customer_id' : 'NULL';
+            const paperSizeCol = cols.has('paper_size') ? 'paper_size' : 'NULL';
+            const colorModeCol = cols.has('color_mode') ? 'color_mode' : 'NULL';
+            const duplexCol = cols.has('duplex') ? 'duplex' : 'NULL';
+            const attemptCountCol = cols.has('attempt_count') ? 'attempt_count' : '1';
+            const retryHistoryCol = cols.has('retry_history_json') ? 'retry_history_json' : 'NULL';
+            const errorCol = cols.has('error') ? 'error' : 'NULL';
+            const durationMsCol = cols.has('duration_ms') ? 'duration_ms' : 'NULL';
+            const isSimulatedCol = cols.has('is_simulated') ? 'is_simulated' : '0';
+            const startedAtCol = cols.has('started_at') ? 'started_at' : 'NULL';
+
+            db.exec(`
+                INSERT INTO print_jobs_v16 (
+                    id, order_id, customer_id, printer_name, printer_device_name, file_path,
+                    status, copies, pages, paper_size, color_mode, duplex, attempt_count,
+                    retry_history_json, error, error_message, duration_ms, is_simulated,
+                    finished_at, started_at, created_at
+                )
+                SELECT 
+                    id, order_id, ${customerIdCol}, printer_name, COALESCE(printer_name, 'Default'), file_path,
+                    CASE 
+                        WHEN status IN ('Completed', 'Printed') THEN 'Submitted'
+                        WHEN status IN ('Preparing', 'Printing', 'Rendering', 'Submitting') THEN 'Uncertain'
+                        WHEN status = 'queued' THEN 'Queued'
+                        WHEN status IN ('Queued', 'Preparing', 'Rendering', 'Submitting', 'Submitted', 'Confirmed Printed', 'Failed', 'Cancelled', 'Uncertain') THEN status
+                        ELSE 'Queued'
+                    END,
+                    COALESCE(copies, 1), COALESCE(pages, 0), ${paperSizeCol}, ${colorModeCol}, ${duplexCol}, COALESCE(${attemptCountCol}, 1),
+                    ${retryHistoryCol}, ${errorCol}, error_message, ${durationMsCol}, ${isSimulatedCol},
+                    finished_at, ${startedAtCol}, created_at
+                FROM print_jobs;
+
+                DROP TABLE print_jobs;
+                ALTER TABLE print_jobs_v16 RENAME TO print_jobs;
+
+                CREATE INDEX IF NOT EXISTS idx_print_jobs_order_id ON print_jobs(order_id);
+                CREATE INDEX IF NOT EXISTS idx_print_jobs_status ON print_jobs(status);
+                CREATE INDEX IF NOT EXISTS idx_print_jobs_printer_device_name ON print_jobs(printer_device_name);
+                CREATE INDEX IF NOT EXISTS idx_print_jobs_locked_by ON print_jobs(locked_by);
+            `);
+        } catch (err) {
+            console.error('[Migration 16] Error applying print_jobs table migration:', err);
+            throw err;
         }
     });
 }

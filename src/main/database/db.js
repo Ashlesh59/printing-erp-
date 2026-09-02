@@ -4,25 +4,31 @@ const path = require('path');
 const fs = require('fs');
 
 let dbDir;
+let dbPath;
 const fallbackDbDir = path.join(__dirname, '../../../../database');
 
-try {
-    if (app) {
-        dbDir = path.join(app.getPath('userData'), 'database');
+if (process.env.TEST_DB_PATH) {
+    dbPath = process.env.TEST_DB_PATH;
+    dbDir = path.dirname(dbPath);
+} else {
+    try {
+        if (app) {
+            dbDir = path.join(app.getPath('userData'), 'database');
+        }
+    } catch (e) {
+        // Fallback for non-Electron test execution environment
     }
-} catch (e) {
-    // Fallback for non-Electron test execution environment
-}
 
-if (!dbDir) {
-    dbDir = fallbackDbDir;
+    if (!dbDir) {
+        dbDir = fallbackDbDir;
+    }
+    dbPath = path.join(dbDir, 'database.db');
 }
 
 if (!fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
 }
 
-const dbPath = path.join(dbDir, 'database.db');
 const fallbackDbPath = path.join(fallbackDbDir, 'database.db');
 
 // Auto-migrate database from old relative folder to persistent userData folder if needed

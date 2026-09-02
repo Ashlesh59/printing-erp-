@@ -620,7 +620,7 @@ class OrderService {
             console.error('[OrderService] Retry print job DB error:', e);
         }
 
-        // Trigger printer
+        // Trigger printer asynchronously to avoid blocking UI on hardware spooling
         try {
             const { printFile } = require('../printer');
             const printOptions = {
@@ -629,12 +629,19 @@ class OrderService {
                 printJobId: newPrintJobId,
                 ...options
             };
-            const printResult = await printFile(printPayload, targetPrinter, printOptions);
+            
+            setImmediate(async () => {
+                try {
+                    await printFile(printPayload, targetPrinter, printOptions);
+                } catch (err) {
+                    console.error(`[OrderService] Async retry print error for order #${orderId}:`, err.message);
+                }
+            });
+
             return {
-                success: printResult.success,
+                success: true,
                 orderId,
-                printJobId: newPrintJobId,
-                error: printResult.error
+                printJobId: newPrintJobId
             };
         } catch (err) {
             return { success: false, error: err.message, code: 'PRINT_ERROR' };
