@@ -441,7 +441,7 @@ async function printFile(payload, printerName, options = {}) {
         if (!targetFilePath && payload) {
             const pdfBytes = await createUnifiedPdf(payload, printerName ? { ...options, printerName } : options);
             const crypto = require('crypto');
-            targetFilePath = path.join(os.tmpdir(), `unified_print_${Date.now()}_${crypto.randomUUID().substring(0, 6)}.pdf`);
+            targetFilePath = path.join(PrintQueueManager.getAppTempDir(), `unified_print_${Date.now()}_${crypto.randomUUID().substring(0, 6)}.pdf`);
             fs.writeFileSync(targetFilePath, pdfBytes);
             isTemp = true;
         }
@@ -485,7 +485,7 @@ async function printFile(payload, printerName, options = {}) {
                 duplex: options.sides || options.duplex || 'Single',
                 scalingMode: options.scaling || options.scalingMode || 'fit',
                 settingsSnapshot: options,
-                isTemp
+                isTempFile: isTemp
             });
         }
 

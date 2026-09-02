@@ -8,6 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { pathToFileURL } = require('url');
 
 class ProductionSpoolerAdapter {
     /**
@@ -187,7 +188,7 @@ class ProductionSpoolerAdapter {
                     }
                 });
 
-                const fileUrl = job.file_path.startsWith('http') ? job.file_path : `file://${path.resolve(job.file_path).replace(/\\/g, '/')}`;
+                const fileUrl = job.file_path.startsWith('http') ? job.file_path : pathToFileURL(path.resolve(job.file_path)).href;
                 workerWindow.loadURL(fileUrl);
             } catch (err) {
                 if (!finished) {

@@ -876,6 +876,135 @@ async function runPhase6Suite() {
         assert.strictEqual(report.summary.purchaseReturnsValid, true);
     });
 
+    await runTest('Scenario 34: Uncertain job retains PDF on disk through requeue, and only deletes temp file upon terminal resolution', async () => {
+        const tempPdf = path.join(PrintQueueManager.getAppTempDir(), `uncertain_retention_${Date.now()}.pdf`);
+        await createValidPdf(tempPdf, 'Uncertain Document Retention Test');
+        assert.ok(fs.existsSync(tempPdf));
+
+        const testAdapter = new TestSpoolerAdapter();
+        testAdapter.simulateTimeout = true; // Spooler times out -> transitions to Uncertain
+        PrintQueueManager.setSpoolerAdapter(testAdapter);
+
+        const job = PrintQueueManager.enqueue({
+            filePath: tempPdf,
+            printerDeviceName: 'Uncertain_Test_Printer',
+            isTempFile: true
+        });
+        assert.strictEqual(job.is_temp_file, 1);
+
+        await PrintQueueManager.processQueue();
+
+        const uncertainJob = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(job.id);
+        assert.strictEqual(uncertainJob.status, 'Uncertain');
+        // Critical: PDF must be RETAINED on disk for operator inspection / resolution
+        assert.ok(fs.existsSync(tempPdf), 'Temporary PDF MUST NOT be deleted when job becomes Uncertain');
+
+        // Requeue the job
+        const requeueRes = PrintQueueManager.requeueJob(job.id);
+        assert.strictEqual(requeueRes.success, true);
+        assert.strictEqual(requeueRes.status, 'Queued');
+        assert.ok(fs.existsSync(tempPdf), 'Temporary PDF MUST NOT be deleted when job is requeued');
+
+        // Confirm Printed (terminal resolution)
+        const confirmRes = PrintQueueManager.confirmPrinted(job.id);
+        assert.strictEqual(confirmRes.success, true);
+        assert.strictEqual(confirmRes.status, 'Confirmed Printed');
+        // Now temp PDF must be cleaned up
+        assert.strictEqual(fs.existsSync(tempPdf), false, 'Temporary PDF must be deleted upon terminal Confirm Printed resolution');
+
+        PrintQueueManager.resetSpoolerAdapter();
+    });
+
+    await runTest('Scenario 35: Permanent customer order files are NEVER deleted upon job completion or terminal resolution', async () => {
+        const permanentDir = path.join(os.tmpdir(), `permanent_customer_orders_${Date.now()}`);
+        if (!fs.existsSync(permanentDir)) fs.mkdirSync(permanentDir, { recursive: true });
+        const permPdf = path.join(permanentDir, 'customer_contract.pdf');
+        await createValidPdf(permPdf, 'Permanent Customer Document');
+        assert.ok(fs.existsSync(permPdf));
+
+        const testAdapter = new TestSpoolerAdapter();
+        PrintQueueManager.setSpoolerAdapter(testAdapter);
+
+        const job = PrintQueueManager.enqueue({
+            filePath: permPdf,
+            printerDeviceName: 'Perm_Test_Printer',
+            isTempFile: false // Permanent customer file
+        });
+        assert.strictEqual(job.is_temp_file, 0);
+
+        await PrintQueueManager.processQueue();
+
+        const submittedJob = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(job.id);
+        assert.strictEqual(submittedJob.status, 'Submitted');
+        assert.ok(fs.existsSync(permPdf), 'Permanent file MUST NEVER be deleted after successful printing');
+
+        // Explicit cleanup attempt must also protect permanent files
+        PrintQueueManager.cleanupJobTempFile(job);
+        assert.ok(fs.existsSync(permPdf), 'Permanent file MUST NEVER be deleted by cleanupJobTempFile');
+
+        try { fs.rmSync(permanentDir, { recursive: true, force: true }); } catch(e) {}
+        PrintQueueManager.resetSpoolerAdapter();
+    });
+
+    await runTest('Scenario 36: Simulator Mode distinctly records is_simulated=1 without physical spooler invocation', async () => {
+        db.prepare('UPDATE settings SET print_simulator_enabled = 1 WHERE id = 1').run();
+
+        const simPdf = path.join(PrintQueueManager.getAppTempDir(), `simulator_test_${Date.now()}.pdf`);
+        await createValidPdf(simPdf, 'Simulator Test Content');
+        assert.ok(fs.existsSync(simPdf));
+
+        const testAdapter = new TestSpoolerAdapter();
+        PrintQueueManager.setSpoolerAdapter(testAdapter);
+
+        const job = PrintQueueManager.enqueue({
+            filePath: simPdf,
+            printerDeviceName: 'Sim_Printer',
+            isTempFile: true
+        });
+
+        await PrintQueueManager.processQueue();
+
+        // Verify physical / mock SpoolerAdapter was NEVER called
+        assert.strictEqual(testAdapter.invocations.length, 0, 'Spooler adapter must not be invoked during simulator execution');
+
+        const simJob = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(job.id);
+        assert.strictEqual(simJob.is_simulated, 1, 'is_simulated must be 1');
+        assert.strictEqual(simJob.status, 'Submitted');
+        assert.ok(simJob.error_message && simJob.error_message.includes('Simulated print delivery'), 'Truthful simulated notice recorded');
+
+        const attemptHistory = JSON.parse(simJob.attempt_history_json);
+        assert.ok(Array.isArray(attemptHistory) && attemptHistory.length > 0);
+        assert.strictEqual(attemptHistory[0].mode, 'SIMULATED');
+        assert.strictEqual(attemptHistory[0].is_simulated, 1);
+
+        db.prepare('UPDATE settings SET print_simulator_enabled = 0 WHERE id = 1').run();
+        PrintQueueManager.resetSpoolerAdapter();
+    });
+
+    await runTest('Scenario 37: Production Spooler uses Node pathToFileURL producing valid Windows and Linux file URLs', () => {
+        const { pathToFileURL, fileURLToPath } = require('url');
+
+        // Test current file path
+        const currentFileUrl = pathToFileURL(path.resolve(__filename)).href;
+        assert.ok(currentFileUrl.startsWith('file:///'), 'Current file path converts to valid file URL');
+        const parsedCurrent = new URL(currentFileUrl);
+        assert.strictEqual(parsedCurrent.protocol, 'file:');
+        assert.strictEqual(fileURLToPath(currentFileUrl), path.resolve(__filename));
+
+        // Test Windows drive path format
+        const winPath = 'C:\\Users\\PrintShop\\Documents\\test.pdf';
+        const winUrl = pathToFileURL(winPath).href;
+        assert.ok(winUrl.startsWith('file:///'), 'Windows path converts to valid file URL');
+        const parsedWin = new URL(winUrl);
+        assert.strictEqual(parsedWin.protocol, 'file:');
+
+        // Test special characters / spaces handling in pathToFileURL
+        const specialPath = path.resolve('test doc with spaces & # symbols.pdf');
+        const specialUrl = pathToFileURL(specialPath).href;
+        assert.ok(specialUrl.startsWith('file:///'), 'Special path converts to valid file URL');
+        assert.strictEqual(fileURLToPath(specialUrl), specialPath, 'fileURLToPath round-trips correctly');
+    });
+
     // Reset default SpoolerAdapter after testing
     PrintQueueManager.resetSpoolerAdapter();
 
@@ -886,7 +1015,7 @@ async function runPhase6Suite() {
     if (failedTests > 0) {
         process.exit(1);
     } else {
-        console.log('🌟 ALL 33 PHASE 6.1 PRODUCTION HARDENING WORKFLOWS PASSED WITH ZERO ERRORS!\n');
+        console.log('🌟 ALL 37 PHASE 6.1 PRODUCTION HARDENING WORKFLOWS PASSED WITH ZERO ERRORS!\n');
     }
 }
 

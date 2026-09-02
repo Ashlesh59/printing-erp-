@@ -112,7 +112,7 @@ class PrintDiagnosticsService {
             page.drawText('Status: Verification Passed - Spooler Pipeline Functional', { x: 50, y: 475, size: 10, font: fontRegular });
 
             const pdfBytes = await pdfDoc.save();
-            const tempTestPath = path.join(os.tmpdir(), `diagnostic_test_page_${Date.now()}.pdf`);
+            const tempTestPath = path.join(PrintQueueManager.getAppTempDir(), `diagnostic_test_page_${Date.now()}.pdf`);
             fs.writeFileSync(tempTestPath, Buffer.from(pdfBytes));
 
             // Enqueue test print
@@ -124,7 +124,8 @@ class PrintDiagnosticsService {
                 pages: 1,
                 paperSize: 'A4',
                 colorMode: 'color',
-                duplex: 'Single'
+                duplex: 'Single',
+                isTempFile: true
             });
 
             return {

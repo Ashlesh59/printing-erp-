@@ -924,11 +924,15 @@ function initDatabase() {
             error_message TEXT,
             duration_ms INTEGER,
             is_simulated INTEGER DEFAULT 0,
+            is_temp_file INTEGER DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (order_id) REFERENCES orders (id) ON DELETE CASCADE,
             FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE SET NULL
         )
     `);
+
+    try { db.exec('ALTER TABLE print_jobs ADD COLUMN is_temp_file INTEGER DEFAULT 0;'); } catch (e) {}
+    try { db.exec('ALTER TABLE print_jobs ADD COLUMN is_simulated INTEGER DEFAULT 0;'); } catch (e) {}
 
     db.exec(`
         CREATE TABLE IF NOT EXISTS inventory_reservations (

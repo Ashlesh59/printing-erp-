@@ -1970,6 +1970,20 @@ function runMigrations() {
             throw err;
         }
     });
+
+    // Migration 21: Persist is_temp_file in print_jobs
+    runMigration(21, 'Persist is_temp_file in print_jobs', () => {
+        try {
+            const tableInfo = db.prepare("PRAGMA table_info(print_jobs)").all();
+            const cols = new Set(tableInfo.map(c => c.name));
+            if (!cols.has('is_temp_file')) {
+                db.exec("ALTER TABLE print_jobs ADD COLUMN is_temp_file INTEGER DEFAULT 0;");
+            }
+        } catch (err) {
+            console.error('[Migration 21] Error adding is_temp_file to print_jobs:', err);
+            throw err;
+        }
+    });
 }
 
 module.exports = { runMigrations };

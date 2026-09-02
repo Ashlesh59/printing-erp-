@@ -442,14 +442,30 @@ async function runAllTests() {
     // Scenario 30: Diagnostics Service & Test Page Generation
     // -----------------------------------------------------------------
     console.log('\nScenario 30: Admin Diagnostics and Test-Page Generation');
+    PrinterDiscovery.setMockPrinters([
+        {
+            deviceName: 'Diagnostic_Test_Printer',
+            displayName: 'Diagnostic Test Printer',
+            portName: 'USB001',
+            driverName: 'Generic PostScript Driver',
+            isDefault: true,
+            status: 'Available',
+            canColor: true,
+            canDuplex: true,
+            rawCapabilities: ['Color', 'Duplex']
+        }
+    ]);
+
     const diagReport = await PrintDiagnosticsService.getDiagnostics();
     assert(diagReport.system && diagReport.system.electronVersion, 'Diagnostics includes Electron version');
     assert(Array.isArray(diagReport.printers), 'Diagnostics includes printer list');
     assert(diagReport.queueStatus, 'Diagnostics includes queue status');
 
-    const testPrintRes = await PrintDiagnosticsService.runTestPrint('Default');
+    const testPrintRes = await PrintDiagnosticsService.runTestPrint('Diagnostic_Test_Printer');
     assert(testPrintRes.success === true, 'Diagnostic test page created and queued');
     assert(testPrintRes.jobId > 0, 'Test print assigned valid job ID');
+
+    PrinterDiscovery.clearMockPrinters();
 
     // -----------------------------------------------------------------
     // Scenario 31: Settings snapshot immutability

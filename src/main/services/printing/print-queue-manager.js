@@ -80,24 +80,24 @@ class PrintQueueManager {
         const scalingMode = jobParams.scalingMode || 'fit';
         const settingsSnapshot = jobParams.settingsSnapshot ? JSON.stringify(jobParams.settingsSnapshot) : null;
         const preflightChecksum = jobParams.preflightChecksum || null;
-        const isTempFile = jobParams.isTempFile ? 1 : 0;
+        const isTempFile = (jobParams.isTempFile || jobParams.is_temp_file || jobParams.isTemp) ? 1 : 0;
+        const isSimulated = (jobParams.isSimulated || jobParams.is_simulated) ? 1 : 0;
 
         const stmt = db.prepare(`
             INSERT INTO print_jobs (
                 order_id, customer_id, printer_name, printer_device_name, file_path,
                 copies, pages, paper_size, color_mode, duplex, scaling_mode,
-                settings_snapshot_json, preflight_checksum, status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Queued', CURRENT_TIMESTAMP)
+                settings_snapshot_json, preflight_checksum, is_temp_file, is_simulated, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Queued', CURRENT_TIMESTAMP)
         `);
 
         const res = stmt.run(
             orderId, customerId, printerName, printerDeviceName, filePath,
             copies, pages, paperSize, colorMode, duplex, scalingMode,
-            settingsSnapshot, preflightChecksum
+            settingsSnapshot, preflightChecksum, isTempFile, isSimulated
         );
 
         const newJob = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(res.lastInsertRowid);
-        newJob.is_temp_file = isTempFile;
         return newJob;
     }
 
@@ -238,6 +238,7 @@ class PrintQueueManager {
                 WHERE id = ?
             `).run(`Cancelled: ${reason}`, jobId);
 
+            this.cleanupJobTempFile(jobId);
             return { success: true, jobId, status: 'Cancelled' };
         } catch (e) {
             return { success: false, error: e.message, code: 'DB_ERROR' };
@@ -261,7 +262,7 @@ class PrintQueueManager {
             WHERE id = ?
         `).run(jobId);
 
-        this.cleanupJobTempFile(job.file_path);
+        this.cleanupJobTempFile(jobId);
         return { success: true, jobId, status: 'Confirmed Printed' };
     }
 
@@ -282,12 +283,13 @@ class PrintQueueManager {
             WHERE id = ?
         `).run(reason, jobId);
 
-        this.cleanupJobTempFile(job.file_path);
+        this.cleanupJobTempFile(jobId);
         return { success: true, jobId, status: 'Failed' };
     }
 
     /**
      * Operator Resolution Workflow: Explicitly requeues an Uncertain/Failed job
+     * RETAINS the underlying document PDF on disk for reprocessing
      */
     static requeueJob(jobId) {
         const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(jobId);
@@ -308,15 +310,36 @@ class PrintQueueManager {
 
     /**
      * Deletes temporary generated PDFs safely, strictly protecting permanent order storage
-     * Only deletes files residing inside the dedicated application temp directory
+     * Only deletes files residing inside the dedicated application temp directory AND flagged as queue-owned temporary
+     * NEVER deletes Uncertain or in-flight jobs
      */
-    static cleanupJobTempFile(filePath) {
+    static cleanupJobTempFile(jobOrId, explicitFilePath = null) {
+        let job = null;
+        if (typeof jobOrId === 'object' && jobOrId !== null) {
+            job = jobOrId;
+        } else if (typeof jobOrId === 'number' || (typeof jobOrId === 'string' && /^\d+$/.test(jobOrId))) {
+            try {
+                job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(parseInt(jobOrId, 10));
+            } catch (e) {}
+        }
+
+        const filePath = explicitFilePath || (job ? job.file_path : (typeof jobOrId === 'string' ? jobOrId : null));
         if (!filePath || typeof filePath !== 'string') return;
-        
+
+        // If job metadata is known, verify is_temp_file = 1. Permanent customer order files (is_temp_file = 0) are NEVER deleted.
+        if (job && job.is_temp_file !== 1) {
+            return;
+        }
+
+        // Never delete an Uncertain or active in-flight job's source file
+        if (job && ['Uncertain', 'Queued', 'Preparing', 'Rendering', 'Submitting'].includes(job.status)) {
+            return;
+        }
+
         try {
             const appTempDir = this.getAppTempDir();
             const realTempDir = fs.existsSync(appTempDir) ? fs.realpathSync(appTempDir) : path.normalize(appTempDir);
-            
+
             if (!fs.existsSync(filePath)) return;
             const realFile = fs.realpathSync(filePath);
 
@@ -372,11 +395,26 @@ class PrintQueueManager {
                 // Simulate brief spool delay
                 await new Promise(resolve => setTimeout(resolve, 50));
 
-                this.releaseJob(jobId, 'Submitted', null, [{
+                db.prepare(`
+                    UPDATE print_jobs 
+                    SET is_simulated = 1,
+                        status = 'Submitted',
+                        locked_by = NULL,
+                        locked_at = NULL,
+                        error_message = 'Simulated print delivery (No physical printer invoked)',
+                        attempt_history_json = ?,
+                        submitted_at = CURRENT_TIMESTAMP,
+                        finished_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                `).run(JSON.stringify([{
                     timestamp: new Date().toISOString(),
                     mode: 'SIMULATED',
-                    status: 'Submitted'
-                }]);
+                    is_simulated: 1,
+                    result: 'SIMULATED_SUCCESS',
+                    details: 'Print simulated to PrintSimulator folder'
+                }]), jobId);
+
+                this.cleanupJobTempFile(initialJob);
                 return { success: true, simulated: true };
             }
 
@@ -389,9 +427,11 @@ class PrintQueueManager {
 
             if (result.success) {
                 this.releaseJob(jobId, 'Submitted', null, [result.attemptDetails]);
+                this.cleanupJobTempFile(initialJob);
                 return { success: true };
             } else if (result.timeout || result.crashed) {
                 // Stalled or crashed during Submitting must transition to Uncertain
+                // Note: File is intentionally RETAINED for operator resolution
                 this.releaseJob(jobId, 'Uncertain', result.failureReason, [result.attemptDetails]);
                 return { success: false, uncertain: true, reason: result.failureReason };
             } else {
@@ -404,7 +444,6 @@ class PrintQueueManager {
             return { success: false, reason: err.message };
         } finally {
             this.activePrinters.delete(targetDevice);
-            this.cleanupJobTempFile(initialJob.file_path);
         }
     }
 
