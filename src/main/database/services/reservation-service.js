@@ -119,7 +119,7 @@ const ReservationService = {
                 InventoryService.checkStockAlerts(res.item_id);
             }
 
-            // Update reservation status to Consumed (or Fulfilled)
+            // Update reservation status to Consumed
             try {
                 db.prepare("UPDATE inventory_reservations SET status = 'Consumed', updated_at = CURRENT_TIMESTAMP WHERE order_id = ? AND status = 'Active'").run(orderId);
             } catch (e) {

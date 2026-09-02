@@ -1835,6 +1835,141 @@ function runMigrations() {
             throw err;
         }
     });
+
+    // Migration 19: Phase 6 Production Hardening and Comprehensive Print Status Check Constraint
+    runMigration(19, "Phase 6 Comprehensive Print Status Constraint", () => {
+        try {
+            const tableInfo = db.prepare("PRAGMA table_info(print_jobs)").all();
+            const cols = new Set(tableInfo.map(c => c.name));
+
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS print_jobs_v19 (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id INTEGER,
+                    customer_id INTEGER,
+                    printer_name TEXT,
+                    printer_device_name TEXT,
+                    file_path TEXT,
+                    status TEXT DEFAULT 'Queued' CHECK (status IN ('Queued', 'Preparing', 'Rendering', 'Submitting', 'Submitted', 'Confirmed Printed', 'Printing', 'Completed', 'Failed', 'Cancelled', 'Uncertain')),
+                    copies INTEGER DEFAULT 1,
+                    pages INTEGER DEFAULT 0,
+                    paper_size TEXT,
+                    color_mode TEXT,
+                    duplex TEXT,
+                    scaling_mode TEXT DEFAULT 'fit',
+                    attempt_count INTEGER DEFAULT 1,
+                    settings_snapshot_json TEXT,
+                    preflight_checksum TEXT,
+                    retry_history_json TEXT,
+                    attempt_history_json TEXT,
+                    locked_by TEXT,
+                    locked_at DATETIME,
+                    submitted_at DATETIME,
+                    completed_at DATETIME,
+                    finished_at DATETIME,
+                    started_at DATETIME,
+                    error TEXT,
+                    error_message TEXT,
+                    duration_ms INTEGER,
+                    is_simulated INTEGER DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (order_id) REFERENCES orders (id) ON DELETE CASCADE,
+                    FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE SET NULL
+                );
+            `);
+
+            const customerIdCol = cols.has('customer_id') ? 'customer_id' : 'NULL';
+            const paperSizeCol = cols.has('paper_size') ? 'paper_size' : 'NULL';
+            const colorModeCol = cols.has('color_mode') ? 'color_mode' : 'NULL';
+            const duplexCol = cols.has('duplex') ? 'duplex' : 'NULL';
+            const attemptCountCol = cols.has('attempt_count') ? 'attempt_count' : '1';
+            const retryHistoryCol = cols.has('retry_history_json') ? 'retry_history_json' : 'NULL';
+            const errorCol = cols.has('error') ? 'error' : 'NULL';
+            const durationMsCol = cols.has('duration_ms') ? 'duration_ms' : 'NULL';
+            const isSimulatedCol = cols.has('is_simulated') ? 'is_simulated' : '0';
+            const startedAtCol = cols.has('started_at') ? 'started_at' : 'NULL';
+
+            db.exec(`
+                INSERT INTO print_jobs_v19 (
+                    id, order_id, customer_id, printer_name, printer_device_name, file_path,
+                    status, copies, pages, paper_size, color_mode, duplex, attempt_count,
+                    retry_history_json, error, error_message, duration_ms, is_simulated,
+                    finished_at, started_at, created_at
+                )
+                SELECT 
+                    id, order_id, ${customerIdCol}, printer_name, COALESCE(printer_device_name, printer_name, 'Default'), file_path,
+                    CASE 
+                        WHEN status IN ('Queued', 'Preparing', 'Rendering', 'Submitting', 'Submitted', 'Confirmed Printed', 'Printing', 'Completed', 'Failed', 'Cancelled', 'Uncertain') THEN status
+                        WHEN status = 'queued' THEN 'Queued'
+                        ELSE 'Queued'
+                    END,
+                    COALESCE(copies, 1), COALESCE(pages, 0), ${paperSizeCol}, ${colorModeCol}, ${duplexCol}, COALESCE(${attemptCountCol}, 1),
+                    ${retryHistoryCol}, ${errorCol}, error_message, ${durationMsCol}, ${isSimulatedCol},
+                    finished_at, ${startedAtCol}, created_at
+                FROM print_jobs;
+
+                DROP TABLE print_jobs;
+                ALTER TABLE print_jobs_v19 RENAME TO print_jobs;
+
+                CREATE INDEX IF NOT EXISTS idx_print_jobs_order_id ON print_jobs(order_id);
+                CREATE INDEX IF NOT EXISTS idx_print_jobs_status ON print_jobs(status);
+                CREATE INDEX IF NOT EXISTS idx_print_jobs_printer_device_name ON print_jobs(printer_device_name);
+                CREATE INDEX IF NOT EXISTS idx_print_jobs_locked_by ON print_jobs(locked_by);
+            `);
+        } catch (err) {
+            console.error('[Migration 19] Error updating print_jobs constraint:', err);
+            throw err;
+        }
+    });
+
+    // Migration 20: Phase 6 Inventory Reservations Status Constraint Alignment
+    runMigration(20, 'Phase 6 Inventory Reservations Status Constraint Alignment', () => {
+        try {
+            const tableInfo = db.prepare("PRAGMA table_info(inventory_reservations)").all();
+            const cols = new Set(tableInfo.map(c => c.name));
+            const orderItemIdCol = cols.has('order_item_id') ? 'order_item_id' : 'NULL';
+            const idempotencyCol = cols.has('idempotency_key') ? 'idempotency_key' : 'NULL';
+            const createdAtCol = cols.has('created_at') ? 'created_at' : 'CURRENT_TIMESTAMP';
+            const updatedAtCol = cols.has('updated_at') ? 'updated_at' : 'CURRENT_TIMESTAMP';
+
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS inventory_reservations_v20 (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id INTEGER REFERENCES orders (id) ON DELETE CASCADE,
+                    order_item_id INTEGER REFERENCES order_items (id) ON DELETE SET NULL,
+                    item_id INTEGER NOT NULL REFERENCES inventory_items (id) ON DELETE RESTRICT,
+                    location_id INTEGER NOT NULL REFERENCES inventory_locations (id) ON DELETE RESTRICT,
+                    qty_reserved REAL NOT NULL CHECK (qty_reserved > 0),
+                    status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active', 'Consumed', 'Fulfilled', 'Released')),
+                    idempotency_key TEXT UNIQUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                INSERT INTO inventory_reservations_v20 (
+                    id, order_id, order_item_id, item_id, location_id, qty_reserved, status, idempotency_key, created_at, updated_at
+                )
+                SELECT 
+                    id, order_id, ${orderItemIdCol}, item_id, location_id, qty_reserved,
+                    CASE 
+                        WHEN status IN ('Active', 'Consumed', 'Fulfilled', 'Released') THEN status
+                        ELSE 'Active'
+                    END,
+                    ${idempotencyCol}, ${createdAtCol}, ${updatedAtCol}
+                FROM inventory_reservations;
+
+                DROP TABLE inventory_reservations;
+                ALTER TABLE inventory_reservations_v20 RENAME TO inventory_reservations;
+
+                CREATE INDEX IF NOT EXISTS idx_reservations_order_id ON inventory_reservations(order_id);
+                CREATE INDEX IF NOT EXISTS idx_reservations_item_id ON inventory_reservations(item_id);
+                CREATE INDEX IF NOT EXISTS idx_reservations_status ON inventory_reservations(status);
+            `);
+        } catch (err) {
+            console.error('[Migration 20] Error updating inventory_reservations constraint:', err);
+            throw err;
+        }
+    });
 }
 
 module.exports = { runMigrations };

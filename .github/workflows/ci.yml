@@ -1,16 +1,17 @@
-name: CI / Corrective Release Integrated Verification Gate
+name: CI / Production Hardening & Release Candidate Gate
 
 on:
   push:
-    branches: [ main, fix/phase-1-5-regression-repair ]
+    branches: [ main, fix/phase-1-5-regression-repair, fix/phase-6-production-hardening ]
   pull_request:
     branches: [ main ]
 
 jobs:
   verify:
-    name: Regression Repair & Integrated Verification Suites
+    name: ${{ matrix.os }} / Node ${{ matrix.node-version }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
         node-version: [20.x]
@@ -25,23 +26,104 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
+      - name: Install Native Linux Dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libcairo2-dev \
+            libpango1.0-dev \
+            libjpeg-dev \
+            libgif-dev \
+            librsvg2-dev \
+            libpixman-1-dev \
+            xvfb \
+            libgbm-dev \
+            libnss3 \
+            libasound2t64 || sudo apt-get install -y libasound2
+
+      - name: JavaScript Syntax Validation
+        run: |
+          node -c src/main/main.js
+          node -c src/main/printer.js
+          node -c src/main/server.js
+          node -c src/main/services/order-service.js
+          node -c src/main/services/printing/print-queue-manager.js
+          node -c src/main/services/purchasing/purchasing-service.js
+
       - name: Install Dependencies
         run: npm ci
 
-      - name: Run Phase 1 Security & Authentication Suite
+      - name: Production Dependency Security Audit
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Run Phase 1 Security & Authentication Suite (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npx electron test_phase1_security.js
+
+      - name: Run Phase 1 Security & Authentication Suite (Windows)
+        if: runner.os == 'Windows'
         run: npx electron test_phase1_security.js
 
-      - name: Run Phase 2 Order Lifecycle & Payments Suite
+      - name: Run Phase 2 Order Lifecycle & Payments Suite (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npx electron test_phase2_lifecycle.js
+
+      - name: Run Phase 2 Order Lifecycle & Payments Suite (Windows)
+        if: runner.os == 'Windows'
         run: npx electron test_phase2_lifecycle.js
 
-      - name: Run Phase 3 Physical Printing & Concurrency Suite
+      - name: Run Phase 3 Physical Printing & Concurrency Suite (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npx electron test_phase3_printing.js
+
+      - name: Run Phase 3 Physical Printing & Concurrency Suite (Windows)
+        if: runner.os == 'Windows'
         run: npx electron test_phase3_printing.js
 
-      - name: Run Phase 4 Enterprise Inventory & Reservations Suite
+      - name: Run Phase 4 Enterprise Inventory & Reservations Suite (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npx electron test_phase4_inventory.js
+
+      - name: Run Phase 4 Enterprise Inventory & Reservations Suite (Windows)
+        if: runner.os == 'Windows'
         run: npx electron test_phase4_inventory.js
 
-      - name: Run Phase 5 Purchasing & Payable Ledger Suite
+      - name: Run Phase 5 Purchasing & Payable Ledger Suite (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npx electron test_phase5_purchasing.js
+
+      - name: Run Phase 5 Purchasing & Payable Ledger Suite (Windows)
+        if: runner.os == 'Windows'
         run: npx electron test_phase5_purchasing.js
 
-      - name: Run 30-Scenario Integrated Release Gate Suite
+      - name: Run 30-Scenario Integrated Release Gate Suite (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npx electron test_integration_suite.js
+
+      - name: Run 30-Scenario Integrated Release Gate Suite (Windows)
+        if: runner.os == 'Windows'
         run: npx electron test_integration_suite.js
+
+      - name: Run Phase 6 Production Hardening & Release Candidate Suite (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npx electron test_phase6_hardening.js
+
+      - name: Run Phase 6 Production Hardening & Release Candidate Suite (Windows)
+        if: runner.os == 'Windows'
+        run: npx electron test_phase6_hardening.js
+
+      - name: Windows Unpacked Packaging Check
+        if: runner.os == 'Windows'
+        run: npx electron-builder --dir
+
+      - name: Upload Test and Build Logs on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-logs-${{ matrix.os }}
+          path: |
+            *.log
+            dist/*.log
+            dist/win-unpacked/*.log
+          retention-days: 7

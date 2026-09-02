@@ -23,10 +23,13 @@ class LicenseService {
     }
 
     /**
-     * Injects custom verification public key (used in isolated test fixtures)
+     * Injects custom verification public key (used in isolated test fixtures only)
      * @param {string|crypto.KeyObject} key 
      */
     setVerificationPublicKey(key) {
+        if (this._isPackaged()) {
+            throw new Error('Security Violation: Verification key replacement is strictly blocked in packaged production builds.');
+        }
         this.publicKey = key;
     }
 
@@ -114,7 +117,8 @@ class LicenseService {
             return { valid: false, state: LicenseState.INVALID, message: 'License is not designated for PrintShopManager.' };
         }
 
-        if (!payload.license_id || typeof payload.license_id !== 'string') {
+        const licenseId = payload.license_id || payload.licenseId;
+        if (!licenseId || typeof licenseId !== 'string') {
             return { valid: false, state: LicenseState.INVALID, message: 'Missing license ID in payload.' };
         }
 
@@ -125,11 +129,12 @@ class LicenseService {
         }
 
         // Validate dates
-        if (!payload.expires_at) {
+        const rawExpiry = payload.expires_at || payload.expiresAt;
+        if (!rawExpiry) {
             return { valid: false, state: LicenseState.INVALID, message: 'Missing license expiration date.' };
         }
 
-        const expiryDate = new Date(payload.expires_at);
+        const expiryDate = new Date(rawExpiry);
         if (isNaN(expiryDate.getTime())) {
             return { valid: false, state: LicenseState.INVALID, message: 'Invalid expiration date format.' };
         }

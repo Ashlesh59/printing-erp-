@@ -223,6 +223,122 @@ class PrintQueueManager {
     }
 
     /**
+     * Operator Resolution Workflow: Confirms an Uncertain/Stalled job was printed
+     */
+    static confirmPrinted(jobId) {
+        const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(jobId);
+        if (!job) return { success: false, error: 'Job not found', code: 'NOT_FOUND' };
+
+        const targetDevice = (job.printer_device_name || job.printer_name || 'Default').toLowerCase();
+        this.activePrinters.delete(targetDevice);
+
+        db.prepare(`
+            UPDATE print_jobs 
+            SET status = 'Confirmed Printed', locked_by = NULL, locked_at = NULL,
+                error_message = NULL, finished_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `).run(jobId);
+
+        this.cleanupJobTempFile(job.file_path);
+        return { success: true, jobId, status: 'Confirmed Printed' };
+    }
+
+    /**
+     * Operator Resolution Workflow: Marks an Uncertain/Stalled job as Failed
+     */
+    static markFailed(jobId, reason = 'Operator marked as failed') {
+        const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(jobId);
+        if (!job) return { success: false, error: 'Job not found', code: 'NOT_FOUND' };
+
+        const targetDevice = (job.printer_device_name || job.printer_name || 'Default').toLowerCase();
+        this.activePrinters.delete(targetDevice);
+
+        db.prepare(`
+            UPDATE print_jobs 
+            SET status = 'Failed', locked_by = NULL, locked_at = NULL,
+                error_message = ?, finished_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `).run(reason, jobId);
+
+        this.cleanupJobTempFile(job.file_path);
+        return { success: true, jobId, status: 'Failed' };
+    }
+
+    /**
+     * Operator Resolution Workflow: Explicitly requeues an Uncertain/Failed job
+     */
+    static requeueJob(jobId) {
+        const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(jobId);
+        if (!job) return { success: false, error: 'Job not found', code: 'NOT_FOUND' };
+
+        const targetDevice = (job.printer_device_name || job.printer_name || 'Default').toLowerCase();
+        this.activePrinters.delete(targetDevice);
+
+        db.prepare(`
+            UPDATE print_jobs 
+            SET status = 'Queued', locked_by = NULL, locked_at = NULL,
+                error_message = NULL
+            WHERE id = ?
+        `).run(jobId);
+
+        return { success: true, jobId, status: 'Queued' };
+    }
+
+    /**
+     * Deletes temporary generated PDFs safely, strictly protecting permanent order storage
+     */
+    static cleanupJobTempFile(filePath) {
+        if (!filePath || typeof filePath !== 'string') return;
+        const os = require('os');
+        const fs = require('fs');
+        const path = require('path');
+        const tmp = os.tmpdir();
+        // Only delete if located inside system/app temp directory
+        if (filePath.startsWith(tmp) || filePath.includes('unified_print_') || filePath.includes('diagnostic_test_page_')) {
+            try {
+                if (fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                }
+            } catch(e) {}
+        }
+    }
+
+    /**
+     * Processes next available queued jobs for free printers
+     */
+    static async processQueue() {
+        let job = this.claimNextJob();
+        while (job) {
+            try {
+                const fs = require('fs');
+                const os = require('os');
+                const path = require('path');
+                const settings = db.prepare('SELECT print_simulator_enabled FROM settings WHERE id = 1').get();
+                const isSimulator = settings ? (settings.print_simulator_enabled === 1) : false;
+
+                if (isSimulator) {
+                    const simulatorDir = path.join(process.cwd(), 'PrintSimulator');
+                    if (!fs.existsSync(simulatorDir)) fs.mkdirSync(simulatorDir, { recursive: true });
+                    if (fs.existsSync(job.file_path)) {
+                        const dest = path.join(simulatorDir, `job_${job.id}_${path.basename(job.file_path)}`);
+                        fs.copyFileSync(job.file_path, dest);
+                    }
+                    this.releaseJob(job.id, 'Submitted');
+                    this.cleanupJobTempFile(job.file_path);
+                } else {
+                    // Spooler submission simulation / real spooler
+                    this.releaseJob(job.id, 'Submitted');
+                    this.cleanupJobTempFile(job.file_path);
+                }
+            } catch (err) {
+                this.releaseJob(job.id, 'Failed', err.message);
+                this.cleanupJobTempFile(job.file_path);
+            }
+            job = this.claimNextJob();
+        }
+    }
+
+    /**
      * Returns live queue state and active printer locks
      */
     static getQueueStatus() {

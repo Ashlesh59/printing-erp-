@@ -759,6 +759,28 @@ const SettingsModel = {
     getSettings: () => {
         return db.prepare('SELECT * FROM settings WHERE id = 1').get();
     },
+    getPublicSettings: () => {
+        const full = db.prepare('SELECT * FROM settings WHERE id = 1').get() || {};
+        return {
+            id: full.id,
+            shop_name: full.shop_name || 'PrintShop',
+            business_address: full.business_address || '',
+            business_contact: full.business_contact || '',
+            business_email: full.business_email || '',
+            business_gstin: full.business_gstin || '',
+            currency_symbol: full.currency_symbol || '₹',
+            default_gst_rate: full.default_gst_rate !== undefined ? full.default_gst_rate : 18,
+            enable_gst: full.enable_gst !== undefined ? full.enable_gst : 1,
+            has_setup: full.has_setup !== undefined ? full.has_setup : 0,
+            owner_name: full.owner_name || '',
+            receipt_footer_message: full.receipt_footer_message || '',
+            use_system_dialog: full.use_system_dialog !== undefined ? full.use_system_dialog : 0,
+            bw_price_per_page: full.bw_price_per_page !== undefined ? full.bw_price_per_page : 2,
+            color_price_per_page: full.color_price_per_page !== undefined ? full.color_price_per_page : 10,
+            enable_mobile_ordering: full.enable_mobile_ordering !== undefined ? full.enable_mobile_ordering : 0,
+            mobile_server_port: full.mobile_server_port || 3000
+        };
+    },
     updateSettings: (data) => {
         try {
             const current = SettingsModel.getSettings() || {};

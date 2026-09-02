@@ -253,7 +253,9 @@ function initDatabase() {
         `ALTER TABLE settings ADD COLUMN business_contact TEXT DEFAULT '+91 98765 43210'`,
         `ALTER TABLE settings ADD COLUMN business_email TEXT DEFAULT 'contact@myprintshop.com'`,
         `ALTER TABLE settings ADD COLUMN business_gstin TEXT DEFAULT ''`,
-        `ALTER TABLE settings ADD COLUMN has_setup INTEGER DEFAULT 0`
+        `ALTER TABLE settings ADD COLUMN has_setup INTEGER DEFAULT 0`,
+        `ALTER TABLE settings ADD COLUMN enable_mobile_ordering INTEGER DEFAULT 0`,
+        `ALTER TABLE settings ADD COLUMN mobile_server_port INTEGER DEFAULT 3000`
     ];
     for (const sql of settingsMigrations) {
         try { db.exec(sql); } catch (e) { /* column already exists */ }
@@ -933,7 +935,7 @@ function initDatabase() {
             item_id INTEGER NOT NULL REFERENCES inventory_items (id) ON DELETE RESTRICT,
             location_id INTEGER NOT NULL REFERENCES inventory_locations (id) ON DELETE RESTRICT,
             qty_reserved REAL NOT NULL CHECK (qty_reserved > 0),
-            status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active', 'Consumed', 'Released')),
+            status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active', 'Consumed', 'Fulfilled', 'Released')),
             idempotency_key TEXT UNIQUE,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP

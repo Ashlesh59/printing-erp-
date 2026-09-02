@@ -68,11 +68,20 @@ class OrderService {
 
     /**
      * Submits and commits a new order atomically
-     * @param {Object} sender - WebContents sender
-     * @param {Object} payload - Order parameters
+     * @param {Object} senderOrPayload - WebContents sender or order payload
+     * @param {Object} payloadOrSender - Order parameters or session
      * @returns {Promise<Object>} Structured result
      */
-    static async submitOrder(sender, payload = {}) {
+    static async submitOrder(senderOrPayload, payloadOrSender = {}) {
+        let sender, payload;
+        if (senderOrPayload && (senderOrPayload.items || senderOrPayload.customer || senderOrPayload.submission_id || senderOrPayload.submissionId)) {
+            payload = senderOrPayload;
+            sender = payloadOrSender;
+        } else {
+            sender = senderOrPayload;
+            payload = payloadOrSender;
+        }
+
         if (!payload || typeof payload !== 'object') {
             return { success: false, error: 'Invalid order payload', code: 'INVALID_PAYLOAD' };
         }
@@ -742,11 +751,20 @@ class OrderService {
     /**
      * Records an incremental payment for an order (Rejects overpayment)
      */
-    static recordPayment(sender, payload = {}) {
-        const orderId = parseInt(payload.orderId, 10);
+    static recordPayment(senderOrPayload, payloadOrSender = {}) {
+        let sender, payload;
+        if (senderOrPayload && (senderOrPayload.orderId || senderOrPayload.order_id)) {
+            payload = senderOrPayload;
+            sender = payloadOrSender;
+        } else {
+            sender = senderOrPayload;
+            payload = payloadOrSender;
+        }
+
+        const orderId = parseInt(payload.orderId || payload.order_id, 10);
         const amount = Math.max(0, parseFloat(payload.amount) || 0);
-        const method = payload.paymentMethod || 'Cash';
-        const ref = payload.referenceNumber || null;
+        const method = payload.paymentMethod || payload.payment_method || 'Cash';
+        const ref = payload.referenceNumber || payload.reference_number || null;
 
         if (isNaN(orderId) || amount <= 0) {
             return { success: false, error: 'Valid order ID and positive payment amount are required.', code: 'INVALID_INPUT' };

@@ -18,7 +18,7 @@ const InventoryService = {
             const itemId = InventoryRepository.createItem(data);
             
             // Log Opening Stock Transaction
-            const openingQty = parseFloat(data.opening_stock) || 0;
+            const openingQty = parseFloat(data.opening_stock !== undefined ? data.opening_stock : data.current_stock) || 0;
             if (openingQty > 0) {
                 InventoryRepository.addTransaction(
                     itemId, 'opening', openingQty, parseFloat(data.purchase_price) || 0,

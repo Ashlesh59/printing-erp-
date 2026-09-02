@@ -519,7 +519,15 @@ function createWindow() {
     // SETTINGS & SETUP WIZARD
     // ==========================================
     registerGuardedHandler('get-settings', ROLES.PUBLIC, () => {
+      return SettingsModel.getPublicSettings();
+    });
+
+    registerGuardedHandler('settings:get-all', ROLES.ADMIN, () => {
       return SettingsModel.getSettings();
+    });
+
+    registerGuardedHandler('settings:get-private', ROLES.ADMIN, () => {
+      return SettingsModel.getCloudSettings();
     });
 
     registerGuardedHandler('update-settings', ROLES.ADMIN, (event, data) => {
@@ -563,6 +571,18 @@ function createWindow() {
 
     registerGuardedHandler('printers:cancel-job', ROLES.OPERATOR, (event, { jobId, reason } = {}) => {
       return PrintQueueManager.cancelJob(jobId, reason);
+    });
+
+    registerGuardedHandler('printers:confirm-printed', ROLES.OPERATOR, (event, { jobId } = {}) => {
+      return PrintQueueManager.confirmPrinted(jobId);
+    });
+
+    registerGuardedHandler('printers:mark-failed', ROLES.OPERATOR, (event, { jobId, reason } = {}) => {
+      return PrintQueueManager.markFailed(jobId, reason);
+    });
+
+    registerGuardedHandler('printers:requeue-job', ROLES.OPERATOR, (event, { jobId } = {}) => {
+      return PrintQueueManager.requeueJob(jobId);
     });
 
     // ==========================================
@@ -1083,15 +1103,81 @@ app.whenReady().then(() => {
   protocol.handle('app-file', (request) => {
     try {
       let rawPath = request.url.replace(/^app-file:\/\/\/?/, '');
-      rawPath = decodeURIComponent(rawPath);
-      const normalizedPath = path.normalize(rawPath);
+      if (rawPath.includes('\0') || rawPath.includes('%00')) {
+        return new Response('Access Denied', { status: 400 });
+      }
+      
+      let decodedPath;
+      try {
+        decodedPath = decodeURIComponent(rawPath);
+      } catch (e) {
+        return new Response('Invalid encoding', { status: 400 });
+      }
+
+      if (decodedPath.includes('\0')) {
+        return new Response('Access Denied', { status: 400 });
+      }
+
+      // Check for raw traversal patterns
+      if (decodedPath.includes('..') || decodedPath.includes('/../') || decodedPath.includes('\\..\\')) {
+        return new Response('Access Denied: Path traversal detected', { status: 403 });
+      }
+
+      const normalizedPath = path.normalize(decodedPath);
+
+      // Verify file existence
       if (!fs.existsSync(normalizedPath)) {
         return new Response('File not found', { status: 404 });
       }
-      return net.fetch(pathToFileURL(normalizedPath).toString());
+
+      // Ensure target is a regular file, not a directory
+      const stats = fs.statSync(normalizedPath);
+      if (!stats.isFile()) {
+        return new Response('Access Denied: Directory access not allowed', { status: 403 });
+      }
+
+      // Validate file extension against allowed whitelist
+      const ext = path.extname(normalizedPath).toLowerCase();
+      const ALLOWED_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.svg', '.webp']);
+      if (!ALLOWED_EXTENSIONS.has(ext)) {
+        return new Response('Access Denied: Unsupported file type', { status: 403 });
+      }
+
+      // Resolve canonical path
+      const canonicalPath = fs.realpathSync(normalizedPath);
+
+      // Define approved storage roots
+      const docsPath = (app && typeof app.getPath === 'function') ? app.getPath('documents') : path.join(os.homedir(), 'Documents');
+      const tempPath = os.tmpdir();
+      const approvedRoots = [
+        path.join(docsPath, 'PrintShopManager'),
+        path.join(docsPath, 'PrintShop'),
+        path.join(os.homedir(), 'Documents', 'PrintShopManager'),
+        path.join(os.homedir(), 'Documents', 'PrintShop'),
+        'C:\\PrintShopManager',
+        tempPath
+      ].map(r => {
+        try {
+          return fs.existsSync(r) ? fs.realpathSync(r) : path.normalize(r);
+        } catch(e) {
+          return path.normalize(r);
+        }
+      });
+
+      const isInsideApprovedRoot = approvedRoots.some(root => {
+        const relative = path.relative(root, canonicalPath);
+        return !relative.startsWith('..') && !path.isAbsolute(relative);
+      });
+
+      if (!isInsideApprovedRoot) {
+        console.warn(`[Security Alert] Blocked app-file access outside approved roots.`);
+        return new Response('Access Denied: Path outside approved root storage', { status: 403 });
+      }
+
+      return net.fetch(pathToFileURL(canonicalPath).toString());
     } catch (err) {
-      console.error("[Custom Protocol] Error loading file:", err);
-      return new Response('Error loading file: ' + err.message, { status: 500 });
+      console.error("[Custom Protocol] Error loading file:", err.message);
+      return new Response('Access Denied', { status: 403 });
     }
   });
 
@@ -1203,6 +1289,14 @@ app.whenReady().then(() => {
       }
   }, 24 * 60 * 60 * 1000);
 
+  // Clean shutdown of mobile server
+  app.on('before-quit', () => {
+    try {
+      const { stopServer } = require('./server');
+      stopServer();
+    } catch(e) {}
+  });
+
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -1213,5 +1307,9 @@ ipcMain.handle('get-server-info', async () => {
 });
 
 app.on('window-all-closed', function () {
+  try {
+    const { stopServer } = require('./server');
+    stopServer();
+  } catch(e) {}
   if (process.platform !== 'darwin') app.quit();
 });
