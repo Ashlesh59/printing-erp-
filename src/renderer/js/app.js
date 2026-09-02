@@ -3458,14 +3458,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             const msgEl = document.getElementById('pin-lock-message');
             if (msgEl) {
                 msgEl.textContent = `Enter ${targetRole === 'Admin' ? 'Administrator' : 'Staff'} PIN to authenticate.`;
-                msgEl.style.color = 'var(--text-secondary)';
+                msgEl.style.color = '#64748b';
             }
             window.clearPin();
             
-            const hiddenInput = document.getElementById('pin-hidden-input');
-            if (hiddenInput) {
-                hiddenInput.value = "";
-                hiddenInput.focus();
+            const inputEl = document.getElementById('pin-visible-input') || document.getElementById('pin-hidden-input');
+            if (inputEl) {
+                inputEl.value = "";
+                setTimeout(() => inputEl.focus(), 50);
             }
         }
     };
@@ -3475,8 +3475,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (pinBuffer.length < 12) {
             pinBuffer += digit;
             updatePinDisplay();
-            const hiddenInput = document.getElementById('pin-hidden-input');
-            if (hiddenInput) hiddenInput.value = pinBuffer;
+            const inputEl = document.getElementById('pin-visible-input') || document.getElementById('pin-hidden-input');
+            if (inputEl) inputEl.value = pinBuffer;
         }
     };
 
@@ -3485,8 +3485,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (pinBuffer.length > 0) {
             pinBuffer = pinBuffer.slice(0, -1);
             updatePinDisplay();
-            const hiddenInput = document.getElementById('pin-hidden-input');
-            if (hiddenInput) hiddenInput.value = pinBuffer;
+            const inputEl = document.getElementById('pin-visible-input') || document.getElementById('pin-hidden-input');
+            if (inputEl) inputEl.value = pinBuffer;
         }
     };
 
@@ -3494,24 +3494,28 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (lockoutInterval) return;
         pinBuffer = "";
         updatePinDisplay();
-        const hiddenInput = document.getElementById('pin-hidden-input');
-        if (hiddenInput) hiddenInput.value = "";
+        const inputEl = document.getElementById('pin-visible-input') || document.getElementById('pin-hidden-input');
+        if (inputEl) inputEl.value = "";
     };
 
     function updatePinDisplay() {
+        const inputEl = document.getElementById('pin-visible-input');
+        if (inputEl && inputEl.value !== pinBuffer) {
+            inputEl.value = pinBuffer;
+        }
         const track = document.getElementById('pin-display-track');
-        if (!track) return;
+        if (track) {
+            if (pinBuffer.length === 0) {
+                track.innerHTML = `<span style="font-size: 0.85rem; color: #94a3b8; letter-spacing: 2px;">• • • •</span>`;
+                return;
+            }
 
-        if (pinBuffer.length === 0) {
-            track.innerHTML = `<span style="font-size: 0.85rem; color: rgba(255,255,255,0.3); letter-spacing: 2px;">• • • • • •</span>`;
-            return;
+            let html = '';
+            for (let i = 0; i < pinBuffer.length; i++) {
+                html += `<span style="display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: #4f46e5; margin: 0 4px; box-shadow: 0 0 8px rgba(79, 70, 229, 0.4);"></span>`;
+            }
+            track.innerHTML = html;
         }
-
-        let html = '';
-        for (let i = 0; i < pinBuffer.length; i++) {
-            html += `<span style="display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: var(--accent-color); margin: 0 4px; box-shadow: 0 0 8px rgba(79, 70, 229, 0.6); animation: popIn 0.15s ease;"></span>`;
-        }
-        track.innerHTML = html;
     }
 
     function startLockoutTimer(lockedUntil) {
@@ -3530,7 +3534,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (submitBtn) submitBtn.disabled = false;
                 if (msgEl) {
                     msgEl.textContent = 'Lockout expired. You may now enter your PIN.';
-                    msgEl.style.color = 'var(--text-secondary)';
+                    msgEl.style.color = '#64748b';
                 }
                 window.clearPin();
             } else {
@@ -3605,29 +3609,32 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
-    const hiddenPinInput = document.getElementById('pin-hidden-input');
-    if (hiddenPinInput) {
-        hiddenPinInput.addEventListener('input', (e) => {
-            if (lockoutInterval) return;
-            const val = e.target.value.replace(/\D/g, '');
-            pinBuffer = val.slice(0, 12);
-            updatePinDisplay();
-        });
+    // Attach keyboard listener to visible and hidden inputs
+    ['pin-visible-input', 'pin-hidden-input'].forEach(inputId => {
+        const el = document.getElementById(inputId);
+        if (el) {
+            el.addEventListener('input', (e) => {
+                if (lockoutInterval) return;
+                const val = e.target.value.replace(/\D/g, '');
+                pinBuffer = val.slice(0, 12);
+                updatePinDisplay();
+            });
 
-        hiddenPinInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                window.submitPin();
-            }
-        });
-    }
+            el.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    window.submitPin();
+                }
+            });
+        }
+    });
 
     const pinModalOverlay = document.getElementById('pin-lock-modal');
     if (pinModalOverlay) {
         pinModalOverlay.addEventListener('click', (e) => {
             if (e.target.tagName !== 'BUTTON') {
-                const hiddenInput = document.getElementById('pin-hidden-input');
-                if (hiddenInput && !lockoutInterval) hiddenInput.focus();
+                const inputEl = document.getElementById('pin-visible-input') || document.getElementById('pin-hidden-input');
+                if (inputEl && !lockoutInterval) inputEl.focus();
             }
         });
     }
