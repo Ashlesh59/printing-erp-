@@ -11,6 +11,16 @@ const PurchasingService = {
     // ──────────────────────────────────────────────────────────────
     // Helper: Money and Math Safety
     // ──────────────────────────────────────────────────────────────
+    toPaise: (val) => {
+        if (typeof val !== 'number' || isNaN(val) || !isFinite(val)) return 0;
+        return Math.round((val + Number.EPSILON) * 100);
+    },
+
+    fromPaise: (paise) => {
+        if (typeof paise !== 'number' || isNaN(paise) || !isFinite(paise)) return 0;
+        return Math.round(paise) / 100;
+    },
+
     roundMoney: (val) => {
         if (typeof val !== 'number' || isNaN(val) || !isFinite(val)) return 0;
         return Math.round((val + Number.EPSILON) * 100) / 100;
@@ -40,22 +50,23 @@ const PurchasingService = {
     },
 
     // ──────────────────────────────────────────────────────────────
-    // Helper: Sync Derived Supplier Balance
+    // Helper: Sync Derived Supplier Balance using Integer Paise
     // ──────────────────────────────────────────────────────────────
     syncSupplierBalance: (supplierId, dbTx = db) => {
-        const row = dbTx.prepare(`
-            SELECT COALESCE(SUM(
-                CASE
-                    WHEN direction = 'CREDIT' THEN amount
-                    WHEN direction = 'DEBIT' THEN -amount
-                    ELSE 0
-                END
-            ), 0) as derived_balance
+        const rows = dbTx.prepare(`
+            SELECT direction, amount
             FROM supplier_ledger
             WHERE supplier_id = ?
-        `).get(supplierId);
+        `).all(supplierId);
 
-        const derivedBalance = PurchasingService.roundMoney(row ? row.derived_balance : 0);
+        let netPaise = 0;
+        for (const r of rows) {
+            const amtPaise = PurchasingService.toPaise(parseFloat(r.amount) || 0);
+            if (r.direction === 'CREDIT') netPaise += amtPaise;
+            else if (r.direction === 'DEBIT') netPaise -= amtPaise;
+        }
+
+        const derivedBalance = PurchasingService.fromPaise(netPaise);
         dbTx.prepare('UPDATE suppliers SET outstanding_balance = ? WHERE id = ?').run(derivedBalance, supplierId);
         return derivedBalance;
     },
@@ -153,8 +164,8 @@ const PurchasingService = {
             const expDeliveryDate = data.expected_delivery_date || null;
             const locationId = data.location_id ? parseInt(data.location_id) : (supplier.storage_location_id || 1);
             const notes = data.notes ? String(data.notes).trim() : '';
-            const requestedStatus = data.status || 'Draft';
-            const initialStatus = ['Draft', 'Approved', 'Ordered'].includes(requestedStatus) ? requestedStatus : 'Draft';
+            // New PO must strictly start in Draft status; Admin approval required to move to Approved/Ordered
+            const initialStatus = 'Draft';
 
             let subtotal = 0;
             let taxAmount = 0;
@@ -877,10 +888,22 @@ const PurchasingService = {
             const creditAmount = PurchasingService.assertNonNegative(data.credit_amount !== undefined ? data.credit_amount : (qty * unitCost), 'credit amount');
             const reason = data.reason ? String(data.reason).trim() : 'Defective / Damaged goods returned';
             const poId = data.po_id ? parseInt(data.po_id) : null;
-            const receiptId = data.receipt_id ? parseInt(data.receipt_id) : null;
+            const receiptId = data.receipt_id ? parseInt(data.receipt_id) : (data.goods_receipt_id ? parseInt(data.goods_receipt_id) : null);
             const returnNumber = data.return_number ? String(data.return_number).trim() : PurchasingService.generateDocNumber('RET');
 
-            // 1. Verify available on-hand stock at location
+            // 1. Verify against Goods Receipt line if linked
+            if (receiptId) {
+                const grItem = db.prepare('SELECT qty_received FROM goods_receipt_items WHERE receipt_id = ? AND item_id = ?').get(receiptId, itemId);
+                if (grItem) {
+                    const alreadyReturned = db.prepare('SELECT COALESCE(SUM(qty_returned), 0) as total FROM purchase_returns WHERE receipt_id = ? AND item_id = ?').get(receiptId, itemId).total;
+                    const netReturnable = grItem.qty_received - alreadyReturned;
+                    if (qty > netReturnable) {
+                        throw new Error(`Return quantity (${qty}) exceeds net returnable quantity (${netReturnable}) on goods receipt #${receiptId}.`);
+                    }
+                }
+            }
+
+            // 2. Verify available on-hand stock at location
             const locStock = db.prepare('SELECT * FROM inventory_location_stock WHERE item_id = ? AND location_id = ?').get(itemId, locationId);
             const availableStock = locStock ? locStock.current_stock : 0;
             if (availableStock < qty) {

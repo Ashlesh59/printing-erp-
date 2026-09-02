@@ -217,6 +217,10 @@ contextBridge.exposeInMainWorld('api', {
   docProcessPlugin:  (filePath, pluginId, params)    => ipcRenderer.invoke('doc-process-plugin', filePath, pluginId, params),
   docBatchProcess:   (filePaths, operation, params)  => ipcRenderer.invoke('doc-batch-process', filePaths, operation, params),
 
+  // File System & Dialogs
+  showSaveDialog:    (defaultName)                   => ipcRenderer.invoke('show-save-dialog', defaultName),
+  copyFile:          (srcPath, destPath)             => ipcRenderer.invoke('copy-file', srcPath, destPath),
+
   // Security & User administration
   login:             (pin, role)                     => ipcRenderer.invoke('auth:login', { pin, role }),
   logout:            ()                              => ipcRenderer.invoke('auth:logout'),

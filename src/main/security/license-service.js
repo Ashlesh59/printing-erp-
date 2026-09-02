@@ -6,13 +6,40 @@ const LicenseState = {
     VALID: 'VALID',
     EXPIRED: 'EXPIRED',
     INVALID: 'INVALID',
-    VERIFICATION_ERROR: 'VERIFICATION_ERROR'
+    VERIFICATION_ERROR: 'VERIFICATION_ERROR',
+    CLOCK_ROLLBACK: 'CLOCK_ROLLBACK'
 };
+
+// Default Production Public Verification Key (SPKI PEM Format)
+// The corresponding private key is held strictly by the offline licensing authority and NEVER committed.
+const DEFAULT_PRODUCTION_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEALgE4Z6c0oY9gM2VqJj8f4k7wN1rB5xX3mQ8yL2pT1vA=
+-----END PUBLIC KEY-----`;
 
 class LicenseService {
     constructor() {
-        // Internal HMAC signing seed for offline format validation
-        this._offlineSecret = 'PSM_OFFLINE_VALIDATION_SALT_V1';
+        this.publicKey = DEFAULT_PRODUCTION_PUBLIC_KEY;
+        this.timeProvider = () => Date.now();
+    }
+
+    /**
+     * Injects custom verification public key (used in isolated test fixtures)
+     * @param {string|crypto.KeyObject} key 
+     */
+    setVerificationPublicKey(key) {
+        this.publicKey = key;
+    }
+
+    /**
+     * Injects custom time provider for testing
+     * @param {Function} provider 
+     */
+    setTimeProvider(provider) {
+        this.timeProvider = typeof provider === 'function' ? provider : () => Date.now();
+    }
+
+    _now() {
+        return this.timeProvider();
     }
 
     _isPackaged() {
@@ -24,93 +51,120 @@ class LicenseService {
         }
     }
 
-    _isDevValidatorAllowed() {
-        // Packaged builds can NEVER use development validator
-        if (this._isPackaged()) return false;
-        return process.env.NODE_ENV === 'development' && process.env.PSM_DEV_LICENSE === 'true';
-    }
-
     /**
-     * Verifies license format and integrity
-     * Format: PSM-<TIER>-<EXPIRY_YYYYMMDD>-<PAYLOAD>-<CHECKSUM>
-     * e.g. PSM-PRO-20281231-A8B9-3D4F
+     * Verifies an asymmetric Ed25519 digital license token
+     * Format: PSM-ED25519.<BASE64_PAYLOAD>.<BASE64_SIGNATURE> or PSM.<BASE64_PAYLOAD>.<BASE64_SIGNATURE>
+     * @param {string} rawKey 
+     * @returns {{ valid: boolean, state: string, message: string, payload?: Object }}
      */
-    _verifyKeyStructure(cleanKey) {
-        if (!cleanKey || typeof cleanKey !== 'string') {
+    verifyLicenseKey(rawKey) {
+        if (!rawKey || typeof rawKey !== 'string') {
             return { valid: false, state: LicenseState.INVALID, message: 'License key is missing or empty' };
         }
 
-        const upper = cleanKey.trim().toUpperCase();
-
-        // 1. Dev Key Handling (Only allowed when dev environment is explicitly enabled and NOT packaged)
-        if (upper.startsWith('PSM-DEV-')) {
-            if (this._isDevValidatorAllowed()) {
-                return {
-                    valid: true,
-                    state: LicenseState.VALID,
-                    tier: 'Development',
-                    expiresAt: '2099-12-31',
-                    message: 'Development license active (Dev Environment Only)'
-                };
-            } else {
-                return {
-                    valid: false,
-                    state: LicenseState.INVALID,
-                    message: 'Development license keys are not permitted in production builds.'
-                };
-            }
-        }
-
-        // 2. Structured Commercial Key Format: PSM-<TIER>-<EXPIRY_YYYYMMDD>-<PAYLOAD>-<CHECKSUM>
-        const match = upper.match(/^PSM-([A-Z]{3,4})-(\d{8})-([A-Z0-9]{4})-([A-Z0-9]{4})$/);
-        if (!match) {
+        const trimmed = rawKey.trim();
+        const parts = trimmed.split('.');
+        if (parts.length !== 3 || (!parts[0].startsWith('PSM-ED25519') && parts[0] !== 'PSM')) {
             return {
                 valid: false,
                 state: LicenseState.INVALID,
-                message: 'Invalid license format. Expected format: PSM-XXXX-YYYYMMDD-XXXX-XXXX'
+                message: 'Invalid digital license format. Expected Ed25519 signed license token.'
             };
         }
 
-        const [, tier, expiryStr, payload, checksum] = match;
+        const [, b64Payload, b64Signature] = parts;
 
-        // Check expiration date
-        const year = parseInt(expiryStr.substring(0, 4), 10);
-        const month = parseInt(expiryStr.substring(4, 6), 10) - 1;
-        const day = parseInt(expiryStr.substring(6, 8), 10);
-        const expiryDate = new Date(Date.UTC(year, month, day, 23, 59, 59));
-
-        if (isNaN(expiryDate.getTime())) {
-            return { valid: false, state: LicenseState.INVALID, message: 'Invalid expiration date in license key' };
+        let payloadBuf, sigBuf, payload;
+        try {
+            payloadBuf = Buffer.from(b64Payload, 'base64');
+            sigBuf = Buffer.from(b64Signature, 'base64');
+            payload = JSON.parse(payloadBuf.toString('utf8'));
+        } catch (e) {
+            return {
+                valid: false,
+                state: LicenseState.INVALID,
+                message: 'Malformed license payload or signature encoding.'
+            };
         }
 
-        const now = new Date();
+        // Verify cryptographic Ed25519 signature
+        try {
+            const isSignatureValid = crypto.verify(null, payloadBuf, this.publicKey, sigBuf);
+            if (!isSignatureValid) {
+                return {
+                    valid: false,
+                    state: LicenseState.INVALID,
+                    message: 'Cryptographic digital signature verification failed. Untrusted or tampered license.'
+                };
+            }
+        } catch (verifyErr) {
+            return {
+                valid: false,
+                state: LicenseState.VERIFICATION_ERROR,
+                message: `License signature verification error: ${verifyErr.message}`
+            };
+        }
+
+        // Validate payload fields
+        if (!payload || typeof payload !== 'object') {
+            return { valid: false, state: LicenseState.INVALID, message: 'Invalid payload structure.' };
+        }
+
+        if (payload.product !== 'PrintShopManager') {
+            return { valid: false, state: LicenseState.INVALID, message: 'License is not designated for PrintShopManager.' };
+        }
+
+        if (!payload.license_id || typeof payload.license_id !== 'string') {
+            return { valid: false, state: LicenseState.INVALID, message: 'Missing license ID in payload.' };
+        }
+
+        const allowedTiers = ['STARTER', 'PRO', 'ENTERPRISE', 'COMMERCIAL'];
+        const tier = String(payload.tier || 'PRO').toUpperCase();
+        if (!allowedTiers.includes(tier)) {
+            return { valid: false, state: LicenseState.INVALID, message: `Unknown license tier: ${payload.tier}` };
+        }
+
+        // Validate dates
+        if (!payload.expires_at) {
+            return { valid: false, state: LicenseState.INVALID, message: 'Missing license expiration date.' };
+        }
+
+        const expiryDate = new Date(payload.expires_at);
+        if (isNaN(expiryDate.getTime())) {
+            return { valid: false, state: LicenseState.INVALID, message: 'Invalid expiration date format.' };
+        }
+
+        const now = new Date(this._now());
         if (expiryDate < now) {
             return {
                 valid: false,
                 state: LicenseState.EXPIRED,
                 expiresAt: expiryDate.toISOString().split('T')[0],
-                message: 'This license key expired on ' + expiryDate.toISOString().split('T')[0]
+                message: `License expired on ${expiryDate.toISOString().split('T')[0]}.`
             };
         }
 
-        // Verify checksum: first 4 hex chars of SHA-256 over tier + expiry + payload + salt
-        const rawToHash = `${tier}-${expiryStr}-${payload}-${this._offlineSecret}`;
-        const computedChecksum = crypto.createHash('sha256').update(rawToHash).digest('hex').substring(0, 4).toUpperCase();
-
-        if (checksum !== computedChecksum) {
-            return {
-                valid: false,
-                state: LicenseState.INVALID,
-                message: 'License key integrity verification failed'
-            };
+        if (payload.issued_at) {
+            const issuedDate = new Date(payload.issued_at);
+            if (!isNaN(issuedDate.getTime()) && issuedDate > new Date(this._now() + 86400000)) {
+                return {
+                    valid: false,
+                    state: LicenseState.CLOCK_ROLLBACK,
+                    message: 'System clock error: License issue date is in the future.'
+                };
+            }
         }
 
         return {
             valid: true,
             state: LicenseState.VALID,
             tier,
+            licenseId: payload.license_id,
+            shopName: payload.shop_name || 'Authorized Print Shop',
             expiresAt: expiryDate.toISOString().split('T')[0],
-            message: 'Commercial license verified successfully'
+            issuedAt: payload.issued_at || null,
+            message: 'Digital Ed25519 license verified successfully.',
+            payload
         };
     }
 
@@ -125,11 +179,11 @@ class LicenseService {
                 return {
                     valid: false,
                     state: LicenseState.UNACTIVATED,
-                    message: 'Software is not activated. Please enter a valid license key.'
+                    message: 'Software is not activated. Please enter a valid digital license key.'
                 };
             }
 
-            const verification = this._verifyKeyStructure(row.license_key);
+            const verification = this.verifyLicenseKey(row.license_key);
             if (!verification.valid) {
                 return {
                     valid: false,
@@ -138,30 +192,44 @@ class LicenseService {
                 };
             }
 
+            // Anti-clock rollback verification against stored DB timestamps
+            if (row.activated_on) {
+                const actDate = new Date(row.activated_on);
+                if (!isNaN(actDate.getTime()) && actDate.getTime() > (this._now() + 86400000)) {
+                    return {
+                        valid: false,
+                        state: LicenseState.CLOCK_ROLLBACK,
+                        message: 'System clock has been manipulated backwards past activation date.'
+                    };
+                }
+            }
+
             return {
                 valid: true,
                 state: LicenseState.VALID,
-                message: 'License is active and valid.',
+                message: 'License is active and cryptographically verified.',
                 info: {
+                    licenseId: verification.licenseId,
                     tier: verification.tier,
+                    shopName: verification.shopName,
                     expiresAt: verification.expiresAt,
                     activatedOn: row.activated_on
                 }
             };
         } catch (err) {
-            console.error('[LicenseService] Database verification error:', err);
+            console.error('[LicenseService] Database license check error:', err);
             // Fail-closed
             return {
                 valid: false,
                 state: LicenseState.VERIFICATION_ERROR,
-                message: 'An error occurred while verifying the license. Access denied.'
+                message: 'A database error occurred while verifying the digital license. Access denied.'
             };
         }
     }
 
     /**
-     * Activates a new license key (Fail-Closed)
-     * @param {string} rawKey
+     * Activates a new digital license key (Fail-Closed)
+     * @param {string} rawKey 
      * @returns {{ success: boolean, state: string, message: string }}
      */
     activateLicense(rawKey) {
@@ -173,8 +241,8 @@ class LicenseService {
             };
         }
 
-        const cleanKey = rawKey.trim().toUpperCase();
-        const verification = this._verifyKeyStructure(cleanKey);
+        const cleanKey = rawKey.trim();
+        const verification = this.verifyLicenseKey(cleanKey);
 
         if (!verification.valid) {
             return {
@@ -186,28 +254,34 @@ class LicenseService {
 
         try {
             const stmt = db.prepare(`
-                INSERT OR REPLACE INTO license (id, license_key, activated_on, expires_at, license_type, status)
-                VALUES (1, ?, CURRENT_TIMESTAMP, ?, ?, ?)
+                INSERT OR REPLACE INTO license (id, license_key, activated_on, expires_at, license_type, status, meta_json)
+                VALUES (1, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
             `);
-            stmt.run(cleanKey, verification.expiresAt, verification.tier, LicenseState.VALID);
+            stmt.run(
+                cleanKey,
+                verification.expiresAt,
+                verification.tier,
+                LicenseState.VALID,
+                JSON.stringify(verification.payload || {})
+            );
 
             return {
                 success: true,
                 state: LicenseState.VALID,
-                message: 'License activated successfully!'
+                message: 'Digital license activated and verified successfully!'
             };
         } catch (err) {
             console.error('[LicenseService] Activation DB error:', err);
             return {
                 success: false,
                 state: LicenseState.VERIFICATION_ERROR,
-                message: 'Database error during activation.'
+                message: 'Database error during license activation.'
             };
         }
     }
 
     /**
-     * Returns sanitized public license info for display
+     * Returns public license summary for UI display
      */
     getPublicLicenseInfo() {
         try {
@@ -217,17 +291,19 @@ class LicenseService {
                     state: LicenseState.UNACTIVATED,
                     license_key: 'Unactivated',
                     activated_on: null,
-                    expires_at: null
+                    expires_at: null,
+                    license_type: null
                 };
             }
 
             const raw = row.license_key;
-            // Mask key: PSM-XXXX-****-****-XXXX
+            // Masked display: PSM-ED25519.XXXX...XXXX
+            const parts = raw.split('.');
             let masked = raw;
-            if (raw.length > 8) {
-                const start = raw.substring(0, 8);
-                const end = raw.substring(raw.length - 4);
-                masked = `${start}-****-${end}`;
+            if (parts.length === 3) {
+                const head = parts[1].substring(0, 6);
+                const tail = parts[2].substring(parts[2].length - 6);
+                masked = `${parts[0]}.${head}****.${tail}`;
             }
 
             return {
@@ -245,25 +321,13 @@ class LicenseService {
             };
         }
     }
-
-    /**
-     * Helper to generate valid signed keys (for commercial license generation / testing)
-     */
-    generateSignedKey(tier = 'PRO', expiryYmd = '20281231', payload = 'A1B2') {
-        const rawToHash = `${tier}-${expiryYmd}-${payload}-${this._offlineSecret}`;
-        const checksum = crypto.createHash('sha256').update(rawToHash).digest('hex').substring(0, 4).toUpperCase();
-        return `PSM-${tier}-${expiryYmd}-${payload}-${checksum}`;
-    }
-
-    /**
-     * Public verification helper
-     */
-    verifyLicenseKey(cleanKey) {
-        return this._verifyKeyStructure(cleanKey);
-    }
 }
+
+const singleton = new LicenseService();
+singleton.LicenseState = LicenseState;
+singleton.LicenseService = LicenseService;
 
 module.exports = {
     LicenseState,
-    LicenseService: new LicenseService()
+    LicenseService: singleton
 };

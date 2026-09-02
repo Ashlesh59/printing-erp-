@@ -5,6 +5,14 @@
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
+    "test": "electron test_integration_suite.js",
+    "test:phase1": "electron test_phase1_security.js",
+    "test:phase2": "electron test_phase2_lifecycle.js",
+    "test:phase3": "electron test_phase3_printing.js",
+    "test:phase4": "electron test_phase4_inventory.js",
+    "test:phase5": "electron test_phase5_purchasing.js",
+    "test:integration": "electron test_integration_suite.js",
+    "test:all": "electron test_phase1_security.js && electron test_phase2_lifecycle.js && electron test_phase3_printing.js && electron test_phase4_inventory.js && electron test_phase5_purchasing.js && electron test_integration_suite.js",
     "dist": "electron-builder",
     "postinstall": "electron-builder install-app-deps"
   },

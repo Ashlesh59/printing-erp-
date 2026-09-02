@@ -928,13 +928,15 @@ function initDatabase() {
     db.exec(`
         CREATE TABLE IF NOT EXISTS inventory_reservations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            order_id INTEGER NOT NULL,
-            item_id INTEGER,
-            qty REAL DEFAULT 0,
-            status TEXT DEFAULT 'Active' CHECK (status IN ('Active', 'Fulfilled', 'Released', 'Cancelled')),
+            order_id INTEGER REFERENCES orders (id) ON DELETE CASCADE,
+            order_item_id INTEGER REFERENCES order_items (id) ON DELETE SET NULL,
+            item_id INTEGER NOT NULL REFERENCES inventory_items (id) ON DELETE RESTRICT,
+            location_id INTEGER NOT NULL REFERENCES inventory_locations (id) ON DELETE RESTRICT,
+            qty_reserved REAL NOT NULL CHECK (qty_reserved > 0),
+            status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active', 'Consumed', 'Released')),
+            idempotency_key TEXT UNIQUE,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (order_id) REFERENCES orders(id),
-            FOREIGN KEY (item_id) REFERENCES inventory_items(id)
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     `);
 

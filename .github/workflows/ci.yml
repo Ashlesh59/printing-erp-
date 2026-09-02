@@ -1,0 +1,47 @@
+name: CI / Corrective Release Integrated Verification Gate
+
+on:
+  push:
+    branches: [ main, fix/phase-1-5-regression-repair ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  verify:
+    name: Regression Repair & Integrated Verification Suites
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        node-version: [20.x]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Phase 1 Security & Authentication Suite
+        run: npx electron test_phase1_security.js
+
+      - name: Run Phase 2 Order Lifecycle & Payments Suite
+        run: npx electron test_phase2_lifecycle.js
+
+      - name: Run Phase 3 Physical Printing & Concurrency Suite
+        run: npx electron test_phase3_printing.js
+
+      - name: Run Phase 4 Enterprise Inventory & Reservations Suite
+        run: npx electron test_phase4_inventory.js
+
+      - name: Run Phase 5 Purchasing & Payable Ledger Suite
+        run: npx electron test_phase5_purchasing.js
+
+      - name: Run 30-Scenario Integrated Release Gate Suite
+        run: npx electron test_integration_suite.js

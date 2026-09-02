@@ -912,57 +912,63 @@ const UserModel = {
 
             const cleanPin = rawPin.trim();
 
-            // 1. Fetch potential users according to expected role
+            // 1. Mandatory Brute-force / Lockout Check BEFORE evaluating any hash
+            const lockoutStatus = authThrottle.isLocked(senderId, expectedRole);
+            if (lockoutStatus.locked) {
+                return {
+                    success: false,
+                    locked: true,
+                    remainingSeconds: lockoutStatus.remainingSeconds,
+                    error: `Terminal is temporarily locked due to repeated failed attempts. Please wait ${lockoutStatus.remainingSeconds}s.`
+                };
+            }
+
+            // 2. Minimum length enforcement (Strict 6 digits)
+            if (cleanPin.length < 6) {
+                const throttle = authThrottle.recordFailure(senderId, expectedRole);
+                return {
+                    success: false,
+                    locked: throttle.locked,
+                    remainingSeconds: throttle.remainingSeconds,
+                    error: "Security PIN must be at least 6 digits."
+                };
+            }
+
+            // 3. Fetch configured users matching expected role (reset_required = 0 only)
             let users = [];
             try {
                 if (expectedRole === 'Admin') {
-                    users = db.prepare("SELECT id, name, role, pin, reset_required FROM users WHERE role = 'Admin'").all();
+                    users = db.prepare("SELECT id, name, role, pin, reset_required FROM users WHERE role = 'Admin' AND reset_required = 0 AND pin IS NOT NULL AND pin != ''").all();
                 } else if (expectedRole === 'Shop') {
-                    users = db.prepare("SELECT id, name, role, pin, reset_required FROM users WHERE role IN ('Operator', 'Manager', 'Admin')").all();
+                    users = db.prepare("SELECT id, name, role, pin, reset_required FROM users WHERE role IN ('Operator', 'Manager', 'Admin') AND reset_required = 0 AND pin IS NOT NULL AND pin != ''").all();
                 } else {
-                    users = db.prepare("SELECT id, name, role, pin, reset_required FROM users").all();
+                    users = db.prepare("SELECT id, name, role, pin, reset_required FROM users WHERE reset_required = 0 AND pin IS NOT NULL AND pin != ''").all();
                 }
             } catch (e) {
                 users = [];
             }
 
-            // 2. Direct match on stored user PINs
-            for (const user of users) {
-                if (user.pin && user.pin.trim() !== '') {
-                    const check = await pinSecurity.verifyPin(cleanPin, user.pin);
-                    if (check.match) {
-                        authThrottle.recordSuccess(senderId, expectedRole);
-                        const { pin, ...userData } = user;
-                        return { success: true, user: userData };
-                    }
-                }
-            }
-
-            // 3. Fallback: If 1234, 0000, 123456, 849201 or unconfigured database, grant instant access
-            const quickPins = ['1234', '0000', '123456', '849201', '9999', '1111', '5678'];
-            if (quickPins.includes(cleanPin) || !users || users.length === 0 || users.every(u => !u.pin || u.reset_required === 1)) {
-                const targetRole = expectedRole === 'Admin' ? 'Admin' : 'Operator';
-                const targetName = expectedRole === 'Admin' ? 'Administrator' : 'Staff Operator';
-                
-                // Auto-seed/update user account in DB so future queries find it
-                try {
-                    const existing = db.prepare("SELECT id FROM users WHERE role = ?").get(targetRole);
-                    const hashed = await pinSecurity.hashPin(cleanPin);
-                    if (existing) {
-                        db.prepare("UPDATE users SET pin = ?, reset_required = 0 WHERE id = ?").run(hashed, existing.id);
-                    } else {
-                        db.prepare("INSERT INTO users (name, role, pin, reset_required) VALUES (?, ?, ?, 0)").run(targetName, targetRole, hashed);
-                    }
-                } catch (e) {}
-
-                authThrottle.recordSuccess(senderId, expectedRole);
+            if (!users || users.length === 0) {
+                const throttle = authThrottle.recordFailure(senderId, expectedRole);
                 return {
-                    success: true,
-                    user: { id: 1, name: targetName, role: targetRole }
+                    success: false,
+                    locked: throttle.locked,
+                    remainingSeconds: throttle.remainingSeconds,
+                    error: "No configured user found for authentication."
                 };
             }
 
-            // Failed verification
+            // 4. Verify PIN hash strictly against configured users
+            for (const user of users) {
+                const check = await pinSecurity.verifyPin(cleanPin, user.pin);
+                if (check.match) {
+                    authThrottle.recordSuccess(senderId, expectedRole);
+                    const { pin, ...userData } = user;
+                    return { success: true, user: userData };
+                }
+            }
+
+            // 5. Failed verification - record failure and calculate lockout
             const throttle = authThrottle.recordFailure(senderId, expectedRole);
             return {
                 success: false,
@@ -1324,15 +1330,27 @@ const WizardModel = {
         try {
             if (!data) return { success: false, error: "Setup data is required." };
 
-            // 1. Mandatory Secure PIN Validation
+            // 1. Check if setup is already genuinely completed
+            try {
+                const settings = db.prepare("SELECT has_setup FROM settings WHERE id = 1").get();
+                const adminExists = db.prepare("SELECT id FROM users WHERE role = 'Admin' AND pin IS NOT NULL AND pin != '' AND reset_required = 0").get();
+                if (settings && settings.has_setup === 1 && adminExists) {
+                    return {
+                        success: false,
+                        error: "Setup is already completed. Resetting credentials without Admin authorization is prohibited."
+                    };
+                }
+            } catch (e) {}
+
+            // 2. Mandatory Secure PIN Validation & Strict Confirmation
             const adminPin = String(data.adminPin || '').trim();
             const adminValidation = pinSecurity.validatePinComplexity(adminPin);
             if (!adminValidation.valid) {
                 return { success: false, error: `Administrator PIN: ${adminValidation.error}` };
             }
 
-            if (data.confirmAdminPin && String(data.confirmAdminPin).trim() !== adminPin) {
-                return { success: false, error: "Administrator PIN confirmation does not match." };
+            if (!data.confirmAdminPin || String(data.confirmAdminPin).trim() !== adminPin) {
+                return { success: false, error: "Administrator PIN confirmation does not match or is missing." };
             }
 
             const operatorPin = String(data.managerPin || data.operatorPin || '').trim();
@@ -1341,26 +1359,45 @@ const WizardModel = {
                 return { success: false, error: `Shop Operator PIN: ${opValidation.error}` };
             }
 
-            if (data.confirmManagerPin && String(data.confirmManagerPin).trim() !== operatorPin) {
-                return { success: false, error: "Shop Operator PIN confirmation does not match." };
+            const opConfirm = data.confirmManagerPin || data.confirmOperatorPin;
+            if (!opConfirm || String(opConfirm).trim() !== operatorPin) {
+                return { success: false, error: "Shop Operator PIN confirmation does not match or is missing." };
             }
 
             if (adminPin === operatorPin) {
                 return { success: false, error: "Administrator PIN and Shop Operator PIN must be different." };
             }
 
-            // 2. Hash credentials using salted scrypt
+            // 3. Optional License Key Activation during setup
+            if (data.licenseKey && String(data.licenseKey).trim() !== '') {
+                const { LicenseService } = require('../security/license-service');
+                const licRes = LicenseService.activateLicense(String(data.licenseKey).trim());
+                if (!licRes.success) {
+                    return { success: false, error: `License validation failed: ${licRes.message}` };
+                }
+            }
+
+            // 4. Hash credentials using salted scrypt
             const hashedAdmin = pinSecurity.hashPinSync(adminPin);
             const hashedOperator = pinSecurity.hashPinSync(operatorPin);
 
             const transaction = db.transaction(() => {
+                // Ensure columns exist on settings for fresh or existing DB
+                const settingsCols = new Set(db.prepare("PRAGMA table_info(settings)").all().map(c => c.name));
+                if (!settingsCols.has('owner_name')) try { db.exec("ALTER TABLE settings ADD COLUMN owner_name TEXT;"); } catch(e) {}
+                if (!settingsCols.has('backup_frequency')) try { db.exec("ALTER TABLE settings ADD COLUMN backup_frequency TEXT DEFAULT 'daily';"); } catch(e) {}
+                if (!settingsCols.has('selected_paper_types')) try { db.exec("ALTER TABLE settings ADD COLUMN selected_paper_types TEXT;"); } catch(e) {}
+
                 // Update Settings
                 const shopName = data.businessName || data.shopName || 'My Print Shop';
+                const ownerName = data.ownerName || data.owner_name || '';
                 const contact = data.phone || '';
                 const email = data.email || '';
                 const address = data.address || '';
                 const gstin = data.gstin || '';
                 const currency = data.currency || '₹';
+                const backupFreq = data.backupFrequency || data.backup_frequency || 'daily';
+                const selectedPapers = (data.selectedPaperTypes || data.selected_paper_types) ? JSON.stringify(data.selectedPaperTypes || data.selected_paper_types) : null;
                 const defaultPrinter = data.defaultPrinter || null;
                 const photoPrinter = data.photoPrinter || null;
                 const receiptPrinter = data.receiptPrinter || null;
@@ -1370,13 +1407,15 @@ const WizardModel = {
 
                 db.prepare(`
                     UPDATE settings 
-                    SET shop_name = ?, business_contact = ?, business_email = ?, business_address = ?,
-                        business_gstin = ?, currency_symbol = ?, default_printer = ?, photo_printer = ?,
-                        receipt_printer = ?, bw_price_per_page = ?, color_price_per_page = ?, default_gst_rate = ?,
+                    SET shop_name = ?, owner_name = ?, business_contact = ?, business_email = ?, business_address = ?,
+                        business_gstin = ?, currency_symbol = ?, backup_frequency = ?, selected_paper_types = ?,
+                        default_printer = ?, photo_printer = ?, receipt_printer = ?,
+                        bw_price_per_page = ?, color_price_per_page = ?, default_gst_rate = ?,
                         has_setup = 1
                     WHERE id = 1
                 `).run(
-                    shopName, contact, email, address, gstin, currency,
+                    shopName, ownerName, contact, email, address,
+                    gstin, currency, backupFreq, selectedPapers,
                     defaultPrinter, photoPrinter, receiptPrinter,
                     bwPrice, colorPrice, gstRate
                 );
@@ -1418,14 +1457,28 @@ const WizardModel = {
                 }
 
                 for (const p of pricingList) {
+                    // Normalize category if photo is used on legacy schema
+                    let cat = p.category;
                     try {
                         const existing = db.prepare("SELECT id FROM pricing WHERE name = ?").get(p.name);
                         if (existing) {
                             db.prepare("UPDATE pricing SET price = ? WHERE id = ?").run(p.price, existing.id);
                         } else {
-                            db.prepare("INSERT INTO pricing (name, category, color_type, paper_size, sides, price) VALUES (?, ?, ?, ?, ?, ?)").run(p.name, p.category, p.color_type, p.paper_size, p.sides, p.price);
+                            db.prepare("INSERT INTO pricing (name, category, color_type, paper_size, sides, price) VALUES (?, ?, ?, ?, ?, ?)").run(p.name, cat, p.color_type, p.paper_size, p.sides, p.price);
                         }
-                    } catch(e) {}
+                    } catch(err) {
+                        // If category constraint triggers on legacy DB, fallback to 'extra'
+                        if (err.message && err.message.includes('CHECK constraint failed')) {
+                            const existing = db.prepare("SELECT id FROM pricing WHERE name = ?").get(p.name);
+                            if (existing) {
+                                db.prepare("UPDATE pricing SET price = ? WHERE id = ?").run(p.price, existing.id);
+                            } else {
+                                db.prepare("INSERT INTO pricing (name, category, color_type, paper_size, sides, price) VALUES (?, 'extra', ?, ?, ?, ?)").run(p.name, p.color_type, p.paper_size, p.sides, p.price);
+                            }
+                        } else {
+                            throw err;
+                        }
+                    }
                 }
 
                 ActivityModel.logActivity("Smart Business Setup Wizard completed successfully", "Setup");

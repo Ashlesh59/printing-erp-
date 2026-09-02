@@ -5,6 +5,8 @@ scratch/
 src/main/database/*.db
 src/main/database/*.db-wal
 src/main/database/*.db-shm
+backups/
+*.db-backup
 cloud-server/node_modules/
 cloud-server/uploads/*
 !cloud-server/uploads/.gitkeep

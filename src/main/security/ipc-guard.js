@@ -1,5 +1,6 @@
 const { ipcMain } = require('electron');
 const sessionManager = require('./session-manager');
+const { LicenseService } = require('./license-service');
 
 /**
  * Centralized IPC Authorization Layer & Permission Matrix
@@ -13,6 +14,19 @@ const ROLES = {
     ADMIN: ['Admin']
 };
 
+const LICENSE_EXEMPT_CHANNELS = new Set([
+    'check-license-status',
+    'check-license',
+    'get-license',
+    'activate-license',
+    'login',
+    'verify-pin',
+    'complete-wizard-setup',
+    'get-settings',
+    'auth:check-lockout',
+    'test:admin-action'
+]);
+
 /**
  * Creates a guarded wrapper function for an IPC handler
  * @param {string} channel - IPC channel name
@@ -21,7 +35,21 @@ const ROLES = {
  */
 function createGuardedWrapper(channel, allowedRoles, handler) {
     return async (event, ...args) => {
-        // 1. If public, execute directly without role checks
+        // 1. Check license validity for non-exempt protected channels
+        if (!LICENSE_EXEMPT_CHANNELS.has(channel) && allowedRoles !== ROLES.PUBLIC && allowedRoles !== 'PUBLIC') {
+            const lic = LicenseService.checkLicenseStatus();
+            if (!lic.valid) {
+                console.warn(`[Security Alert] Access denied on '${channel}': Valid license required. State: ${lic.state}`);
+                return {
+                    success: false,
+                    error: lic.message || 'Access Denied: A valid digital license is required.',
+                    code: 'LICENSE_REQUIRED',
+                    licenseState: lic.state
+                };
+            }
+        }
+
+        // 2. If public, execute directly without role checks
         if (allowedRoles === ROLES.PUBLIC || allowedRoles === 'PUBLIC') {
             try {
                 return await handler(event, ...args);
@@ -31,7 +59,7 @@ function createGuardedWrapper(channel, allowedRoles, handler) {
             }
         }
 
-        // 2. Validate sender webContents & role
+        // 3. Validate sender webContents & role
         const targetRoles = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
         const auth = sessionManager.requireRole(event ? event.sender : null, targetRoles);
 
@@ -44,7 +72,7 @@ function createGuardedWrapper(channel, allowedRoles, handler) {
             };
         }
 
-        // 3. Authorized — execute handler
+        // 4. Authorized — execute handler
         try {
             return await handler(event, ...args);
         } catch (err) {

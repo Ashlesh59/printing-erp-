@@ -14,7 +14,7 @@ function runMigrations() {
     } else {
         try {
             const applied = db.prepare('SELECT version FROM db_migrations').all().map(r => r.version);
-            const totalMigrations = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+            const totalMigrations = Array.from({ length: 18 }, (_, i) => i + 1);
             pendingMigrations = totalMigrations.some(v => !applied.includes(v));
         } catch (e) {
             pendingMigrations = true;
@@ -1766,6 +1766,72 @@ function runMigrations() {
 
         } catch (err) {
             console.error('[Migration 17] Error applying purchasing hardening migration:', err);
+            throw err;
+        }
+    });
+
+    // Migration 18: Enterprise Inventory, Reservations & Reversal Integrity
+    runMigration(18, 'Phase 4 Enterprise Inventory and Reservations Invariants Hardening', () => {
+        try {
+            // 1. Create or Verify inventory_reservations Table
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS inventory_reservations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id INTEGER REFERENCES orders (id) ON DELETE CASCADE,
+                    order_item_id INTEGER REFERENCES order_items (id) ON DELETE SET NULL,
+                    item_id INTEGER NOT NULL REFERENCES inventory_items (id) ON DELETE RESTRICT,
+                    location_id INTEGER NOT NULL REFERENCES inventory_locations (id) ON DELETE RESTRICT,
+                    qty_reserved REAL NOT NULL CHECK (qty_reserved > 0),
+                    status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active', 'Consumed', 'Released')),
+                    idempotency_key TEXT UNIQUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_inv_res_order ON inventory_reservations(order_id);
+                CREATE INDEX IF NOT EXISTS idx_inv_res_item ON inventory_reservations(item_id);
+                CREATE INDEX IF NOT EXISTS idx_inv_res_status ON inventory_reservations(status);
+            `);
+
+            const resCols = new Set(db.prepare("PRAGMA table_info(inventory_reservations)").all().map(c => c.name));
+            if (!resCols.has('location_id')) {
+                try { db.exec("ALTER TABLE inventory_reservations ADD COLUMN location_id INTEGER REFERENCES inventory_locations(id) DEFAULT 1;"); } catch(e) {}
+            }
+            if (!resCols.has('qty_reserved')) {
+                try { db.exec("ALTER TABLE inventory_reservations ADD COLUMN qty_reserved REAL DEFAULT 0;"); } catch(e) {}
+                try { db.exec("UPDATE inventory_reservations SET qty_reserved = qty WHERE qty IS NOT NULL;"); } catch(e) {}
+            }
+
+            // 2. Add reversal integrity columns to stock_transactions
+            const txCols = new Set(db.prepare("PRAGMA table_info(stock_transactions)").all().map(c => c.name));
+            if (!txCols.has('reversal_of_id')) {
+                try { db.exec("ALTER TABLE stock_transactions ADD COLUMN reversal_of_id INTEGER REFERENCES stock_transactions(id);"); } catch(e) {}
+            }
+            if (!txCols.has('is_reversed')) {
+                try { db.exec("ALTER TABLE stock_transactions ADD COLUMN is_reversed INTEGER DEFAULT 0;"); } catch(e) {}
+            }
+
+            // 3. Ensure reserved_stock is initialized to 0 across all inventory items
+            db.exec(`
+                UPDATE inventory_items SET reserved_stock = 0 WHERE reserved_stock IS NULL OR reserved_stock < 0;
+                UPDATE inventory_location_stock SET reserved_stock = 0 WHERE reserved_stock IS NULL OR reserved_stock < 0;
+            `);
+
+            // 4. Sync active reservations into reserved_stock
+            const activeRes = db.prepare(`
+                SELECT item_id, location_id, SUM(qty_reserved) as total_reserved
+                FROM inventory_reservations
+                WHERE status = 'Active'
+                GROUP BY item_id, location_id
+            `).all();
+
+            for (const r of activeRes) {
+                db.prepare("UPDATE inventory_items SET reserved_stock = ? WHERE id = ?").run(r.total_reserved, r.item_id);
+                db.prepare("UPDATE inventory_location_stock SET reserved_stock = ? WHERE item_id = ? AND location_id = ?").run(r.total_reserved, r.item_id, r.location_id);
+            }
+
+        } catch (err) {
+            console.error('[Migration 18] Error applying inventory reservations migration:', err);
             throw err;
         }
     });

@@ -14,6 +14,23 @@ class PrinterDiscovery {
     static cache = null;
     static lastScanTime = 0;
     static CACHE_TTL_MS = 10000; // 10 seconds TTL
+    static mockPrinters = null;
+
+    /**
+     * Injects mock printers for deterministic testing
+     */
+    static setMockPrinters(printers) {
+        this.mockPrinters = printers;
+        this.cache = printers;
+    }
+
+    /**
+     * Clears mock printers
+     */
+    static clearMockPrinters() {
+        this.mockPrinters = null;
+        this.cache = null;
+    }
 
     /**
      * Normalizes OS printer status numbers into truthful standard health strings
@@ -118,6 +135,8 @@ class PrinterDiscovery {
      * @returns {Promise<Array>} Array of normalized printer models
      */
     static async getPrinters(forceRefresh = false) {
+        if (this.mockPrinters) return this.mockPrinters;
+
         const now = Date.now();
         if (!forceRefresh && this.cache && (now - this.lastScanTime) < this.CACHE_TTL_MS) {
             return this.cache;

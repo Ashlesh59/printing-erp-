@@ -974,6 +974,30 @@ function createWindow() {
       }
     });
 
+    registerGuardedHandler('show-save-dialog', ROLES.OPERATOR, async (e, defaultName) => {
+      const { dialog } = require('electron');
+      const win = BrowserWindow.fromWebContents(e.sender);
+      const res = await dialog.showSaveDialog(win || mainWindow, {
+        defaultPath: defaultName || 'Compiled_Layout.pdf',
+        filters: [{ name: 'PDF Documents', extensions: ['pdf'] }]
+      });
+      return res.canceled ? null : res.filePath;
+    });
+
+    registerGuardedHandler('copy-file', ROLES.OPERATOR, async (e, srcPath, destPath) => {
+      if (!srcPath || !destPath || typeof srcPath !== 'string' || typeof destPath !== 'string') {
+        throw new Error('Invalid file path arguments.');
+      }
+      if (srcPath.includes('..') || destPath.includes('..') || srcPath.includes('\0') || destPath.includes('\0')) {
+        throw new Error('Path traversal violation.');
+      }
+      if (!fs.existsSync(srcPath)) {
+        throw new Error('Source file does not exist.');
+      }
+      fs.copyFileSync(srcPath, destPath);
+      return { success: true };
+    });
+
     // ==========================================
     // ENTERPRISE PRODUCTS, PROFILES & DEVICES
     // ==========================================

@@ -54,6 +54,24 @@ class PrintQueueManager {
         return { recovered, markedUncertain };
     }
 
+    static acquirePrinterLock(printerDeviceName, workerId = 'worker') {
+        const device = (printerDeviceName || 'default').toLowerCase();
+        if (this.activePrinters.has(device)) return false;
+        this.activePrinters.add(device);
+        return true;
+    }
+
+    static releasePrinterLock(printerDeviceName) {
+        const device = (printerDeviceName || 'default').toLowerCase();
+        this.activePrinters.delete(device);
+        return true;
+    }
+
+    static recoverInterruptedJobs() {
+        const res = this.recoverStaleJobsOnStartup();
+        return { requeuedCount: res.recovered, uncertainCount: res.markedUncertain };
+    }
+
     /**
      * Enqueues a new print job into persistent storage
      * @param {Object} jobParams

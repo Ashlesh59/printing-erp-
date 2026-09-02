@@ -163,39 +163,65 @@ async function runTests() {
     assert(allowedRes.success === true && allowedRes.payload.test === 1, 'Guard permits Admin calling Admin endpoint');
 
     // ──────────────────────────────────────────────────────────────
-    // 6. LICENSE SERVICE & FAIL-CLOSED ENFORCEMENT
+    // 6. ASYMMETRIC Ed25519 DIGITAL LICENSE & FAIL-CLOSED ENFORCEMENT
     // ──────────────────────────────────────────────────────────────
-    console.log('\n[6/7] Testing License Service (Fail-Closed & HMAC)...');
+    console.log('\n[6/7] Testing Asymmetric Ed25519 Digital License Verification...');
     const { LicenseService, LicenseState } = require('./src/main/security/license-service');
 
-    // Generate valid license
-    const validKey = LicenseService.generateSignedKey('PRO', '20281231', 'A8B9');
-    const keyParts = validKey.split('-');
-    assert(keyParts.length === 5 && keyParts[0] === 'PSM' && keyParts[1] === 'PRO', 'generateSignedKey creates valid structure');
+    // Generate isolated ephemeral Ed25519 test keypair
+    const testKeyPair = crypto.generateKeyPairSync('ed25519');
+    LicenseService.setVerificationPublicKey(testKeyPair.publicKey);
 
-    const verifyKey = LicenseService.verifyLicenseKey(validKey);
-    assert(verifyKey.state === LicenseState.VALID && verifyKey.valid === true, 'Valid signed license verifies successfully');
+    function createTestLicenseToken(payloadObj, privKey) {
+        const payloadBuf = Buffer.from(JSON.stringify(payloadObj), 'utf8');
+        const sig = crypto.sign(null, payloadBuf, privKey);
+        return `PSM-ED25519.${payloadBuf.toString('base64')}.${sig.toString('base64')}`;
+    }
 
-    // Tampered key
-    const tamperedKey = validKey.slice(0, -4) + 'AAAA';
-    const verifyTampered = LicenseService.verifyLicenseKey(tamperedKey);
-    assert(verifyTampered.valid === false && verifyTampered.state === LicenseState.INVALID, 'Tampered HMAC signature is rejected as INVALID');
+    const validPayload = {
+        license_id: 'LIC-TEST-2026-001',
+        product: 'PrintShopManager',
+        tier: 'PRO',
+        issued_at: '2026-01-01',
+        expires_at: '2028-12-31',
+        shop_name: 'Test Enterprise Shop'
+    };
 
-    // Short / random strings
+    const validDigitalToken = createTestLicenseToken(validPayload, testKeyPair.privateKey);
+    const verifyDigital = LicenseService.verifyLicenseKey(validDigitalToken);
+    assert(verifyDigital.valid === true && verifyDigital.state === LicenseState.VALID, 'Ed25519 digitally signed license verifies successfully');
+    assert(verifyDigital.tier === 'PRO' && verifyDigital.shopName === 'Test Enterprise Shop', 'Decodes valid payload attributes accurately');
+
+    // Tampered signature
+    const tamperedToken = validDigitalToken.slice(0, -6) + 'AAAAAA';
+    const verifyTampered = LicenseService.verifyLicenseKey(tamperedToken);
+    assert(verifyTampered.valid === false && verifyTampered.state === LicenseState.INVALID, 'Tampered Ed25519 signature is rejected as INVALID');
+
+    // Expired license
+    const expiredPayload = { ...validPayload, license_id: 'LIC-EXP-001', expires_at: '2024-01-01' };
+    const expiredToken = createTestLicenseToken(expiredPayload, testKeyPair.privateKey);
+    const verifyExpired = LicenseService.verifyLicenseKey(expiredToken);
+    assert(verifyExpired.valid === false && verifyExpired.state === LicenseState.EXPIRED, 'Expired digital license is rejected as EXPIRED');
+
+    // Non-digital / Trivial strings
     assert(LicenseService.verifyLicenseKey('1234').valid === false, 'Rejects trivial 4-character license (1234)');
     assert(LicenseService.verifyLicenseKey('abcd-efgh-ijkl-mnop').valid === false, 'Rejects arbitrary formatted license');
 
-    // Test activation and retrieval
-    const actRes = LicenseService.activateLicense(validKey);
-    assert(actRes.success === true, 'License activation succeeds for valid key');
+    // Test activation and checkLicenseStatus
+    const actRes = LicenseService.activateLicense(validDigitalToken);
+    assert(actRes.success === true, 'Digital license activation succeeds');
     const status = LicenseService.checkLicenseStatus();
     assert(status.valid === true && status.state === LicenseState.VALID, 'checkLicenseStatus returns valid active license');
 
     // ──────────────────────────────────────────────────────────────
-    // 7. SETUP WIZARD WITH COMPLEXITY & MATCHING PINS
+    // 7. SETUP WIZARD WITH COMPLEXITY & MATCHING PINS & BACKDOOR ELIMINATION
     // ──────────────────────────────────────────────────────────────
-    console.log('\n[7/7] Testing Setup Wizard Execution & UserModel Security...');
+    console.log('\n[7/7] Testing Setup Wizard Execution & Backdoor Elimination...');
     const { UserModel, WizardModel, SettingsModel } = require('./src/main/database/models');
+
+    // Clean users for clean test run
+    db.prepare("DELETE FROM users").run();
+    db.prepare("UPDATE settings SET has_setup = 0 WHERE id = 1").run();
 
     // Weak admin PIN in wizard
     const weakWz = await WizardModel.executeWizardSetup({
@@ -217,19 +243,45 @@ async function runTests() {
     });
     assert(mismatchWz.success === false, 'Setup Wizard rejects mismatched Admin PIN confirmation');
 
+    // Missing confirmation PIN
+    const missingConfirmWz = await WizardModel.executeWizardSetup({
+        businessName: 'Secure Print Shop',
+        adminPin: '849201',
+        managerPin: '739104'
+    });
+    assert(missingConfirmWz.success === false, 'Setup Wizard strictly rejects omitted PIN confirmation');
+
     // Matching distinct valid PINs
     const validWz = await WizardModel.executeWizardSetup({
         businessName: 'Secure Print Shop',
+        ownerName: 'Alice Operator',
         phone: '9876543210',
         currency: '₹',
         adminPin: '849201',
         confirmAdminPin: '849201',
         managerPin: '739104',
         confirmManagerPin: '739104',
-        papers: ['A4', 'A3'],
-        services: ['bw_print', 'color_print']
+        backupFrequency: 'weekly',
+        selectedPaperTypes: ['A4', 'A3', 'Photo'],
+        services: ['bw_print', 'color_print', 'photo']
     });
     assert(validWz.success === true, 'Setup Wizard completes successfully with valid confirmed PINs');
+
+    // Verify settings persisted
+    const savedSettings = db.prepare("SELECT owner_name, backup_frequency, has_setup FROM settings WHERE id = 1").get();
+    assert(savedSettings.owner_name === 'Alice Operator', 'Persists owner_name in settings');
+    assert(savedSettings.backup_frequency === 'weekly', 'Persists backup_frequency in settings');
+    assert(savedSettings.has_setup === 1, 'Marks has_setup = 1 upon completion');
+
+    // Verify setup cannot be re-run to overwrite credentials
+    const rerunWz = await WizardModel.executeWizardSetup({
+        businessName: 'Hijacked Shop',
+        adminPin: '948201',
+        confirmAdminPin: '948201',
+        managerPin: '639102',
+        confirmManagerPin: '639102'
+    });
+    assert(rerunWz.success === false, 'Setup Wizard blocks unauthorized re-execution on configured system');
 
     // Verify created users in DB
     const adminUser = db.prepare("SELECT * FROM users WHERE role = 'Admin'").get();
@@ -237,12 +289,31 @@ async function runTests() {
     assert(adminUser.pin.startsWith('scrypt$'), 'Admin user PIN stored in scrypt format');
     assert(adminUser.pin !== '849201', 'Plaintext PIN is NOT stored in database');
 
-    // Test UserModel.verifyPin
+    // Test UserModel.verifyPin with legitimate credentials
     const loginAdmin = await UserModel.verifyPin('849201', 201, 'Admin');
     assert(loginAdmin.success === true && loginAdmin.user.role === 'Admin', 'UserModel.verifyPin successfully authenticates Admin');
 
-    const loginWrong = await UserModel.verifyPin('999999', 201, 'Admin');
-    assert(loginWrong.success === false, 'UserModel.verifyPin rejects incorrect Admin PIN');
+    // Test Negative Backdoor Regression: All known quick-PINs MUST FAIL
+    const backdoors = ['1234', '0000', '123456', '9999', '1111', '5678', '000000'];
+    let allBackdoorsBlocked = true;
+    for (const b of backdoors) {
+        const res = await UserModel.verifyPin(b, 202, 'Admin');
+        if (res.success === true) {
+            allBackdoorsBlocked = false;
+            console.error(`CRITICAL: Backdoor PIN '${b}' authenticated!`);
+        }
+    }
+    assert(allBackdoorsBlocked === true, 'All universal PIN backdoors (1234, 0000, 123456, 9999, 1111, 5678, 000000) are blocked');
+
+    // Test Brute-force Lockout Enforcement in UserModel.verifyPin
+    authThrottle.resetAll();
+    const senderLockTest = 5555;
+    for (let i = 0; i < 5; i++) {
+        await UserModel.verifyPin('999999', senderLockTest, 'Admin');
+    }
+    // Now sender 5555 is locked. Even correct PIN must be rejected during lockout.
+    const lockedAttempt = await UserModel.verifyPin('849201', senderLockTest, 'Admin');
+    assert(lockedAttempt.success === false && lockedAttempt.locked === true, 'UserModel.verifyPin enforces lockout and rejects correct PIN while locked');
 
     // Summary
     console.log('\n════════════════════════════════════════════════════════════════════════════');

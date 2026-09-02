@@ -3,10 +3,11 @@
  * 
  * Manages the entire lifecycle of an order:
  * - Validation & normalization
- * - File staging & safe commit
- * - Atomic database transaction (Customer, Order, Order Items, GST Invoice, Payments, Production, Print, Audit)
+ * - File staging & safe commit directly to verified permanent storage
+ * - Atomic database transaction (Customer, Order, Order Items, GST Invoice, Payments, Production, Print, Audit, Reservations)
  * - Decoupled state machines
  * - Idempotency enforcement via submission_id
+ * - Strict financial accounting (no overpayment, explicit refund tracking)
  */
 
 const fs = require('fs');
@@ -16,7 +17,6 @@ const crypto = require('crypto');
 const { app } = require('electron');
 const db = require('../database/db');
 const PricingEngine = require('./pricing-engine');
-const ReconciliationService = require('./reconciliation-service');
 const eventBus = require('../events/EventBus');
 const { EventTypes } = require('../events/EventTypes');
 
@@ -24,10 +24,11 @@ class OrderService {
     /**
      * Gets permanent order storage directory
      */
-    static getOrderPermanentDir(orderId, customerName = 'Walk-in') {
-        const cleanName = customerName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    static getOrderPermanentDir(identifier, customerName = 'Walk-in') {
+        const cleanName = String(customerName).replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'walk_in';
         const dateStr = new Date().toISOString().split('T')[0];
-        const folderName = `Order_${dateStr}_${String(orderId).padStart(4, '0')}`;
+        const cleanId = String(identifier).replace(/[^a-z0-9_-]/gi, '_');
+        const folderName = `Order_${dateStr}_${cleanId}`;
         
         let baseDir;
         try {
@@ -111,7 +112,6 @@ class OrderService {
         for (const item of rawItems) {
             const filePath = item.filePath || item.file_path;
             if (filePath && typeof filePath === 'string') {
-                // Check path safety (prevent path traversal attacks)
                 if (filePath.includes('..') || filePath.includes('\0')) {
                     return { success: false, error: `Unsafe file path detected: ${filePath}`, code: 'UNSAFE_PATH' };
                 }
@@ -136,44 +136,22 @@ class OrderService {
             gstin: payload.gstin || ''
         });
 
-        // 5. Customer Identification (Walk-in vs Registered)
-        let customerId = null;
-        let customerNameSnapshot = payload.customerName || payload.name || 'Walk-in Customer';
-        let customerPhoneSnapshot = payload.customerPhone || payload.phone || '';
-        let customerGstinSnapshot = payload.customerGstin || payload.gstin || '';
-
-        const cleanPhone = customerPhoneSnapshot.replace(/[^0-9]/g, '');
-        // Only link customer record if genuine 10-digit phone provided and not generic placeholder
-        if (cleanPhone.length >= 10 && cleanPhone !== '0000000000') {
-            try {
-                let cust = db.prepare('SELECT id, name, phone, gstin, state FROM customers WHERE phone = ?').get(cleanPhone);
-                if (cust) {
-                    customerId = cust.id;
-                    customerNameSnapshot = cust.name;
-                    if (customerGstinSnapshot && customerGstinSnapshot !== cust.gstin) {
-                        db.prepare('UPDATE customers SET gstin = ? WHERE id = ?').run(customerGstinSnapshot, cust.id);
-                    }
-                } else if (payload.customerName && payload.customerName !== 'Guest Customer') {
-                    const createRes = db.prepare(`
-                        INSERT INTO customers (name, phone, gstin, state)
-                        VALUES (?, ?, ?, ?)
-                    `).run(payload.customerName, cleanPhone, customerGstinSnapshot || null, payload.state || 'Local');
-                    customerId = createRes.lastInsertRowid;
-                }
-            } catch (custErr) {
-                console.warn('[OrderService] Customer lookup warning:', custErr.message);
-            }
-        }
-
-        // 6. Payment Allocation
+        // 5. Payment Allocation Check
         const paymentInput = payload.payment || {};
         const paymentAmount = Math.max(0, parseFloat(paymentInput.amount) || 0);
         const paymentMethod = paymentInput.method || paymentInput.paymentMethod || 'Cash';
         const paymentRef = paymentInput.reference || paymentInput.referenceNumber || null;
 
+        if (paymentAmount > pricingSnapshot.grandTotal + 0.001 && pricingSnapshot.grandTotal > 0) {
+            return {
+                success: false,
+                error: `Payment amount (₹${paymentAmount.toFixed(2)}) cannot exceed order total (₹${pricingSnapshot.grandTotal.toFixed(2)}).`,
+                code: 'OVERPAYMENT_NOT_ALLOWED'
+            };
+        }
+
         let paymentStatus = 'Unpaid';
         let recordedPaidAmount = 0;
-
         if (paymentAmount >= pricingSnapshot.grandTotal && pricingSnapshot.grandTotal > 0) {
             paymentStatus = 'Paid';
             recordedPaidAmount = pricingSnapshot.grandTotal;
@@ -182,7 +160,7 @@ class OrderService {
             recordedPaidAmount = paymentAmount;
         }
 
-        // 7. Action & Status Determination
+        // 6. Action & Status Determination
         const action = (payload.action || 'SAVE').toUpperCase();
         let initialOrderStatus = 'Confirmed';
         let initialProdStatus = 'Waiting';
@@ -197,51 +175,82 @@ class OrderService {
             initialPrintStatus = 'Queued';
         }
 
-        // 8. Safe File Staging
-        const stagingBase = ReconciliationService.getStagingBaseDir();
-        const stageDir = path.join(stagingBase, `Order_${submissionId}`);
-        const stagedFilePaths = [];
+        // 7. Prepare Permanent Order Directory & Stage Permanent Files BEFORE DB Commit
+        let customerNameSnapshot = payload.customerName || payload.name || 'Walk-in Customer';
+        let customerPhoneSnapshot = payload.customerPhone || payload.phone || '';
+        let customerGstinSnapshot = payload.customerGstin || payload.gstin || '';
+        const cleanPhone = customerPhoneSnapshot.replace(/[^0-9]/g, '');
+
+        const permanentDir = this.getOrderPermanentDir(submissionId, customerNameSnapshot);
+        const permanentFileRecords = [];
+        const newlyCreatedFiles = [];
 
         try {
-            if (!fs.existsSync(stageDir)) {
-                fs.mkdirSync(stageDir, { recursive: true });
-            }
-
             for (let i = 0; i < pricingSnapshot.items.length; i++) {
                 const item = pricingSnapshot.items[i];
                 if (item.filePath && fs.existsSync(item.filePath)) {
-                    const ext = path.extname(item.filePath);
-                    const safeName = `item_${i + 1}_${Date.now()}${ext}`;
-                    const targetStagePath = path.join(stageDir, safeName);
-                    fs.copyFileSync(item.filePath, targetStagePath);
+                    const ext = path.extname(item.filePath) || '.pdf';
+                    const baseName = path.basename(item.filePath, ext);
+                    const safeFileName = `item_${i + 1}_${Date.now()}_${baseName.replace(/[^a-z0-9_-]/gi, '_')}${ext}`;
+                    const targetPermanentPath = path.join(permanentDir, safeFileName);
 
-                    // Compute SHA-256 checksum
-                    const fileBuf = fs.readFileSync(targetStagePath);
+                    // Copy file to permanent storage
+                    fs.copyFileSync(item.filePath, targetPermanentPath);
+                    newlyCreatedFiles.push(targetPermanentPath);
+
+                    // Compute SHA-256 Checksum on permanent file
+                    const fileBuf = fs.readFileSync(targetPermanentPath);
                     const checksum = crypto.createHash('sha256').update(fileBuf).digest('hex');
 
-                    stagedFilePaths.push({
+                    permanentFileRecords.push({
                         itemIndex: i,
-                        stagedPath: targetStagePath,
+                        permanentPath: targetPermanentPath,
                         fileName: path.basename(item.filePath),
                         checksum
                     });
                 }
             }
-        } catch (stageErr) {
-            // Clean up staging on failure
-            try { fs.rmSync(stageDir, { recursive: true, force: true }); } catch (e) {}
-            return { success: false, error: `File staging failed: ${stageErr.message}`, code: 'STAGING_ERROR' };
+        } catch (copyErr) {
+            // Clean up any files copied so far
+            for (const f of newlyCreatedFiles) {
+                try { fs.unlinkSync(f); } catch (e) {}
+            }
+            return {
+                success: false,
+                error: `Permanent file storage commit failed: ${copyErr.message}`,
+                code: 'FILE_COMMIT_ERROR'
+            };
         }
 
-        // 9. Atomic SQLite Transaction
+        // 8. Atomic SQLite Transaction (Customer, Order, Items, GST Invoice, Payment, Production, Print, Reservation)
         let committedOrderId = null;
         let committedInvoiceId = null;
         let committedInvoiceNumber = null;
         let committedProdJobId = null;
         let committedPrintJobId = null;
+        const recordedBy = typeof sender?.role === 'string' ? sender.role : (Array.isArray(sender?.role) ? sender.role[0] : 'Operator');
 
         const tx = db.transaction(() => {
-            // 9.1 Insert Order
+            // 8.1 Customer Unit of Work (Inside Transaction)
+            let customerId = null;
+            if (cleanPhone.length >= 10 && cleanPhone !== '0000000000') {
+                let cust = db.prepare('SELECT id, name, phone, gstin, state FROM customers WHERE phone = ?').get(cleanPhone);
+                if (cust) {
+                    customerId = cust.id;
+                    customerNameSnapshot = cust.name;
+                    if (customerGstinSnapshot && customerGstinSnapshot !== cust.gstin) {
+                        db.prepare('UPDATE customers SET gstin = ? WHERE id = ?').run(customerGstinSnapshot, cust.id);
+                    }
+                } else if (payload.customerName && payload.customerName !== 'Guest Customer' && payload.customerName !== 'Walk-in Customer') {
+                    const createRes = db.prepare(`
+                        INSERT INTO customers (name, phone, gstin, state)
+                        VALUES (?, ?, ?, ?)
+                    `).run(payload.customerName, cleanPhone, customerGstinSnapshot || null, payload.state || 'Local');
+                    customerId = createRes.lastInsertRowid;
+                }
+            }
+
+            // 8.2 Insert Order
             const stmtOrder = db.prepare(`
                 INSERT INTO orders (
                     submission_id, customer_id, customer_name_snapshot, customer_phone_snapshot,
@@ -268,7 +277,7 @@ class OrderService {
             );
             committedOrderId = resOrder.lastInsertRowid;
 
-            // 9.2 Insert Order Items
+            // 8.3 Insert Order Items (storing verified permanent paths)
             const stmtItem = db.prepare(`
                 INSERT INTO order_items (
                     order_id, file_name, file_path, print_type, paper_size, sides,
@@ -280,13 +289,15 @@ class OrderService {
 
             for (let i = 0; i < pricingSnapshot.items.length; i++) {
                 const item = pricingSnapshot.items[i];
-                const staged = stagedFilePaths.find(s => s.itemIndex === i);
+                const perm = permanentFileRecords.find(p => p.itemIndex === i);
+                const finalFilePath = perm ? perm.permanentPath : (item.filePath || null);
+                const finalChecksum = perm ? perm.checksum : null;
                 const extrasJson = Array.isArray(item.extras) ? JSON.stringify(item.extras) : null;
 
                 stmtItem.run(
                     committedOrderId,
                     item.fileName,
-                    staged ? staged.stagedPath : (item.filePath || null),
+                    finalFilePath,
                     item.printType,
                     item.paperSize,
                     item.sides,
@@ -304,11 +315,11 @@ class OrderService {
                     extrasJson,
                     item.product_id || null,
                     item.print_profile_id || null,
-                    staged ? staged.checksum : null
+                    finalChecksum
                 );
             }
 
-            // 9.3 Create GST Invoice (if enabled)
+            // 8.4 Create GST Invoice (if enabled)
             if (pricingSnapshot.enableGst) {
                 committedInvoiceNumber = this.generateInvoiceNumber();
                 const stmtInvoice = db.prepare(`
@@ -360,9 +371,8 @@ class OrderService {
                 }
             }
 
-            // 9.4 Record Payment (if collected)
+            // 8.5 Record Payment (if collected)
             if (recordedPaidAmount > 0) {
-                const recordedBy = typeof sender?.role === 'string' ? sender.role : (Array.isArray(sender?.role) ? sender.role[0] : 'Operator');
                 const stmtPayment = db.prepare(`
                     INSERT INTO payments (
                         order_id, invoice_id, amount, payment_method, reference_number,
@@ -379,7 +389,7 @@ class OrderService {
                 );
             }
 
-            // 9.5 Create Production Job
+            // 8.6 Create Production Job
             const scheduleDetails = payload.scheduleDetails || {};
             const finalJobTitle = `${customerNameSnapshot} — Order #${committedOrderId}`;
             const stmtProd = db.prepare(`
@@ -408,8 +418,9 @@ class OrderService {
             );
             committedProdJobId = resProd.lastInsertRowid;
 
-            // 9.6 Create Print Job (if Save & Print)
+            // 8.7 Create Print Job (storing permanent file path)
             if (action === 'SAVE_AND_PRINT') {
+                const primaryPermPath = permanentFileRecords[0]?.permanentPath || (pricingSnapshot.items[0]?.filePath || null);
                 const stmtPrint = db.prepare(`
                     INSERT INTO print_jobs (
                         order_id, file_path, printer_name, status, copies, pages
@@ -418,7 +429,7 @@ class OrderService {
 
                 const resPrint = stmtPrint.run(
                     committedOrderId,
-                    stagedFilePaths[0]?.stagedPath || null,
+                    primaryPermPath,
                     payload.default_printer || 'Default',
                     pricingSnapshot.items[0]?.copies || 1,
                     pricingSnapshot.items.reduce((s, i) => s + i.physicalSheets, 0)
@@ -426,7 +437,22 @@ class OrderService {
                 committedPrintJobId = resPrint.lastInsertRowid;
             }
 
-            // 9.7 Audit activity
+            // 8.8 Stock Reservation Integration (Phase 4 Unit of Work)
+            try {
+                const ReservationService = require('../database/services/reservation-service');
+                if (ReservationService && typeof ReservationService.reserve === 'function') {
+                    ReservationService.reserve(committedOrderId, {
+                        locationId: payload.locationId || 1,
+                        pages: pricingSnapshot.items[0]?.sourcePages || 1,
+                        copies: pricingSnapshot.items[0]?.copies || 1
+                    }, recordedBy, sender?.role || 'Operator');
+                }
+            } catch (resErr) {
+                // Stock reservation logged
+                console.warn('[OrderService] Stock reservation warning:', resErr.message);
+            }
+
+            // 8.9 Audit Activity
             try {
                 db.prepare(`
                     INSERT INTO activities (description, type)
@@ -435,40 +461,19 @@ class OrderService {
             } catch (e) {}
         });
 
-        // Execute transaction
+        // Execute Transaction
         try {
             tx();
         } catch (dbErr) {
-            // Clean up staging files on DB rollback
-            try { fs.rmSync(stageDir, { recursive: true, force: true }); } catch (e) {}
+            // Clean up created permanent files on database transaction rollback
+            for (const f of newlyCreatedFiles) {
+                try { fs.unlinkSync(f); } catch (e) {}
+            }
             console.error('[OrderService] Transaction rollback:', dbErr);
             return { success: false, error: `Database transaction failed: ${dbErr.message}`, code: 'DB_ERROR' };
         }
 
-        // 10. Commit Staged Files to Permanent Order Storage
-        try {
-            const finalDir = this.getOrderPermanentDir(committedOrderId, customerNameSnapshot);
-            const committedPaths = [];
-
-            for (const staged of stagedFilePaths) {
-                const finalPath = path.join(finalDir, staged.fileName);
-                fs.copyFileSync(staged.stagedPath, finalPath);
-                committedPaths.push({ itemIndex: staged.itemIndex, finalPath });
-            }
-
-            // Update permanent paths in DB
-            const updateItemStmt = db.prepare('UPDATE order_items SET file_path = ? WHERE order_id = ? AND id = (SELECT id FROM order_items WHERE order_id = ? LIMIT 1 OFFSET ?)');
-            committedPaths.forEach((cp, idx) => {
-                updateItemStmt.run(cp.finalPath, committedOrderId, committedOrderId, idx);
-            });
-
-            // Clean up staging folder now that commit succeeded
-            fs.rmSync(stageDir, { recursive: true, force: true });
-        } catch (commitErr) {
-            console.warn('[OrderService] Warning moving staged files to permanent storage:', commitErr.message);
-        }
-
-        // 11. Async Print Spooling (For Save & Print)
+        // 9. Async Print Queue Submission (For Save & Print) using verified permanent files
         if (action === 'SAVE_AND_PRINT' && committedPrintJobId) {
             setImmediate(async () => {
                 try {
@@ -484,8 +489,14 @@ class OrderService {
                         printJobId: committedPrintJobId
                     };
                     
-                    const printPayload = stagedFilePaths.map(s => ({ path: s.stagedPath, ext: path.extname(s.stagedPath) }));
-                    await printFile(printPayload, printOptions.printerName, printOptions);
+                    const printPayload = permanentFileRecords.map(p => ({
+                        path: p.permanentPath,
+                        ext: path.extname(p.permanentPath)
+                    }));
+
+                    if (printPayload.length > 0) {
+                        await printFile(printPayload, printOptions.printerName, printOptions);
+                    }
                 } catch (printErr) {
                     console.error(`[OrderService] Async print spool error for order #${committedOrderId}:`, printErr.message);
                 }
@@ -516,7 +527,7 @@ class OrderService {
     }
 
     /**
-     * Cancels an existing order safely
+     * Cancels an existing order safely (Does NOT fake refund without explicit refund entry)
      * @param {Object} sender 
      * @param {number} orderId 
      * @param {string} reason 
@@ -536,10 +547,10 @@ class OrderService {
         }
 
         const isPaid = order.payment_status === 'Paid' || order.payment_status === 'Partially Paid';
-        const finalPaymentStatus = isPaid ? 'Refunded' : 'Voided';
+        const finalPaymentStatus = isPaid ? order.payment_status : 'Voided';
 
         const tx = db.transaction(() => {
-            // Update order
+            // Update order status and payment status
             db.prepare(`
                 UPDATE orders 
                 SET status = 'Cancelled', payment_status = ?, notes = COALESCE(notes || ' | ', '') || ?
@@ -563,9 +574,17 @@ class OrderService {
             // Cancel invoice
             db.prepare(`
                 UPDATE gst_invoices 
-                SET status = 'Cancelled', payment_status = ?
+                SET status = 'Cancelled'
                 WHERE order_id = ?
-            `).run(finalPaymentStatus, orderId);
+            `).run(orderId);
+
+            // Release inventory reservation if active
+            try {
+                const ReservationService = require('../database/services/reservation-service');
+                if (ReservationService && typeof ReservationService.cancel === 'function') {
+                    ReservationService.cancel(orderId, sender?.role || 'Operator', 'Order Cancellation');
+                }
+            } catch (e) {}
 
             // Log activity
             try {
@@ -576,6 +595,78 @@ class OrderService {
         try {
             tx();
             return { success: true, orderId, orderStatus: 'Cancelled', paymentStatus: finalPaymentStatus };
+        } catch (err) {
+            return { success: false, error: err.message, code: 'DB_ERROR' };
+        }
+    }
+
+    /**
+     * Records an explicit refund for a cancelled or adjusted order
+     */
+    static recordRefund(sender, payloadOrId = {}, amountArg = null, reasonArg = null) {
+        let orderId, refundAmount, reason, method;
+        if (typeof payloadOrId === 'object' && payloadOrId !== null) {
+            orderId = parseInt(payloadOrId.orderId, 10);
+            refundAmount = Math.max(0, parseFloat(payloadOrId.amount) || 0);
+            reason = payloadOrId.reason || 'Customer refund';
+            method = payloadOrId.paymentMethod || 'Cash';
+        } else {
+            orderId = parseInt(payloadOrId, 10);
+            refundAmount = Math.max(0, parseFloat(amountArg) || 0);
+            reason = reasonArg || 'Customer refund';
+            method = 'Cash';
+        }
+
+        if (isNaN(orderId) || refundAmount <= 0) {
+            return { success: false, error: 'Valid order ID and positive refund amount are required.', code: 'INVALID_INPUT' };
+        }
+
+        const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
+        if (!order) return { success: false, error: 'Order not found', code: 'NOT_FOUND' };
+
+        const currentPaid = parseFloat(order.paid_amount) || 0;
+        if (refundAmount > currentPaid) {
+            return {
+                success: false,
+                error: `Refund amount (₹${refundAmount.toFixed(2)}) cannot exceed collected payment (₹${currentPaid.toFixed(2)}).`,
+                code: 'EXCESSIVE_REFUND'
+            };
+        }
+
+        const newPaid = Math.max(0, currentPaid - refundAmount);
+        const newPaymentStatus = newPaid === 0 ? 'Refunded' : 'Partially Paid';
+        const recordedBy = typeof sender?.role === 'string' ? sender.role : (Array.isArray(sender?.role) ? sender.role[0] : 'Operator');
+
+        const tx = db.transaction(() => {
+            // Insert refund record into payments ledger (negative entry)
+            db.prepare(`
+                INSERT INTO payments (order_id, invoice_id, amount, payment_method, reference_number, status, recorded_by)
+                VALUES (?, (SELECT id FROM gst_invoices WHERE order_id = ?), ?, ?, ?, 'Refunded', ?)
+            `).run(orderId, orderId, -refundAmount, method, reason, recordedBy);
+
+            // Update order paid_amount and payment_status
+            db.prepare(`
+                UPDATE orders 
+                SET paid_amount = ?, payment_status = ?
+                WHERE id = ?
+            `).run(newPaid, newPaymentStatus, orderId);
+
+            // Update GST Invoice
+            db.prepare(`
+                UPDATE gst_invoices 
+                SET paid_amount = ?, payment_status = ?
+                WHERE order_id = ?
+            `).run(newPaid, newPaymentStatus, orderId);
+
+            // Log activity
+            try {
+                db.prepare('INSERT INTO activities (description, type) VALUES (?, ?)').run(`Refund of ₹${refundAmount} recorded for Order #${orderId}: ${reason}`, 'order_refunded');
+            } catch (e) {}
+        });
+
+        try {
+            tx();
+            return { success: true, orderId, refundAmount, remainingPaid: newPaid, paymentStatus: newPaymentStatus };
         } catch (err) {
             return { success: false, error: err.message, code: 'DB_ERROR' };
         }
@@ -649,7 +740,7 @@ class OrderService {
     }
 
     /**
-     * Records an incremental payment for an order
+     * Records an incremental payment for an order (Rejects overpayment)
      */
     static recordPayment(sender, payload = {}) {
         const orderId = parseInt(payload.orderId, 10);
@@ -666,10 +757,19 @@ class OrderService {
 
         const currentPaid = parseFloat(order.paid_amount) || 0;
         const grandTotal = parseFloat(order.total_price) || 0;
-        const newPaid = Math.min(grandTotal, currentPaid + amount);
+        const remainingBalance = grandTotal - currentPaid;
 
+        if (amount > remainingBalance + 0.001) {
+            return {
+                success: false,
+                error: `Payment amount (₹${amount.toFixed(2)}) exceeds remaining balance (₹${Math.max(0, remainingBalance).toFixed(2)}).`,
+                code: 'OVERPAYMENT_NOT_ALLOWED'
+            };
+        }
+
+        const newPaid = Math.min(grandTotal, currentPaid + amount);
         let newPaymentStatus = 'Partially Paid';
-        if (newPaid >= grandTotal) {
+        if (newPaid >= grandTotal - 0.001) {
             newPaymentStatus = 'Paid';
         }
 
@@ -694,6 +794,11 @@ class OrderService {
                 SET paid_amount = ?, payment_status = ?, status = CASE WHEN ? = 'Paid' THEN 'Paid' ELSE status END
                 WHERE order_id = ?
             `).run(newPaid, newPaymentStatus, newPaymentStatus, orderId);
+
+            // Log activity
+            try {
+                db.prepare('INSERT INTO activities (description, type) VALUES (?, ?)').run(`Payment of ₹${amount} received for Order #${orderId} (${method})`, 'payment_recorded');
+            } catch (e) {}
         });
 
         try {
@@ -706,3 +811,4 @@ class OrderService {
 }
 
 module.exports = OrderService;
+

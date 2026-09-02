@@ -298,6 +298,22 @@ async function runAllTests() {
     // Scenario 21: Unauthorized roles blocked from restricted print operations
     // -----------------------------------------------------------------
     console.log('\nScenario 21: IPC Guard authorization on print endpoints');
+    const { LicenseService } = require('./src/main/security/license-service');
+    const testKeyP3 = crypto.generateKeyPairSync('ed25519');
+    LicenseService.setVerificationPublicKey(testKeyP3.publicKey);
+    const testPayloadP3 = {
+        license_id: 'LIC-P3-001',
+        product: 'PrintShopManager',
+        tier: 'PRO',
+        issued_at: '2026-01-01',
+        expires_at: '2028-12-31',
+        shop_name: 'Phase 3 Print Shop'
+    };
+    const payloadBufP3 = Buffer.from(JSON.stringify(testPayloadP3), 'utf8');
+    const sigP3 = crypto.sign(null, payloadBufP3, testKeyP3.privateKey);
+    const tokenP3 = `PSM-ED25519.${payloadBufP3.toString('base64')}.${sigP3.toString('base64')}`;
+    LicenseService.activateLicense(tokenP3);
+
     const guardedDiag = createGuardedWrapper('printers:get-diagnostics', ROLES.ADMIN, async () => {
         return await PrintDiagnosticsService.getDiagnostics();
     });

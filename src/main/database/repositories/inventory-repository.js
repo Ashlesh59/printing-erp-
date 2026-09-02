@@ -30,6 +30,12 @@ const InventoryRepository = {
         return db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(id);
     },
     createItem: (data) => {
+        const opening = parseFloat(data.opening_stock) || 0;
+        const current = data.current_stock !== undefined ? (parseFloat(data.current_stock) || 0) : opening;
+        const purchasePrice = parseFloat(data.purchase_price) || 0;
+        const avgCost = parseFloat(data.average_cost) || purchasePrice;
+        const lastPrice = parseFloat(data.last_purchase_price) || purchasePrice;
+
         const stmt = db.prepare(`
             INSERT INTO inventory_items (
                 sku, barcode, name, category_id, brand, supplier_id, description, unit,
@@ -39,11 +45,11 @@ const InventoryRepository = {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         const res = stmt.run(
-            data.sku, data.barcode, data.name, data.category_id, data.brand, data.supplier_id,
-            data.description, data.unit, data.opening_stock, data.current_stock, data.minimum_stock,
-            data.maximum_stock, data.reorder_level, data.purchase_price, data.selling_price,
-            data.average_cost, data.last_purchase_price, data.storage_location_id, data.expiry_date,
-            data.notes, data.status || 'Active', data.size, data.gsm, data.finish, data.color_type, data.sheets_per_ream
+            data.sku || null, data.barcode || null, data.name, data.category_id || 1, data.brand || null, data.supplier_id || null,
+            data.description || null, data.unit || 'Units', opening, current, parseFloat(data.minimum_stock) || 0,
+            parseFloat(data.maximum_stock) || 0, parseFloat(data.reorder_level) || 0, purchasePrice, parseFloat(data.selling_price) || 0,
+            avgCost, lastPrice, data.storage_location_id || 1, data.expiry_date || null,
+            data.notes || null, data.status || 'Active', data.size || null, data.gsm || null, data.finish || null, data.color_type || null, data.sheets_per_ream || null
         );
         return res.lastInsertRowid;
     },
@@ -91,12 +97,32 @@ const InventoryRepository = {
     // ──────────────────────────────────────────────────────────────
     // Transactions
     // ──────────────────────────────────────────────────────────────
-    addTransaction: (itemId, type, qty, cost, refType = null, refId = null, reason = '', operator = 'System', role = 'System') => {
-        const stmt = db.prepare(`
-            INSERT INTO stock_transactions (item_id, type, qty, cost, reference_type, reference_id, reason, operator)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        stmt.run(itemId, type, qty, cost, refType, refId, reason, `${operator} (${role})`);
+    addTransaction: (itemId, type, qty, cost, refType = null, refId = null, reason = '', operator = 'System', role = 'System', reversalOfId = null) => {
+        const txCols = new Set(db.prepare("PRAGMA table_info(stock_transactions)").all().map(c => c.name));
+        if (txCols.has('reversal_of_id')) {
+            const stmt = db.prepare(`
+                INSERT INTO stock_transactions (item_id, type, qty, cost, reference_type, reference_id, reason, operator, reversal_of_id, is_reversed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            `);
+            const res = stmt.run(itemId, type, qty, cost, refType, refId, reason, `${operator} (${role})`, reversalOfId);
+            return res.lastInsertRowid;
+        } else {
+            const stmt = db.prepare(`
+                INSERT INTO stock_transactions (item_id, type, qty, cost, reference_type, reference_id, reason, operator)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `);
+            const res = stmt.run(itemId, type, qty, cost, refType, refId, reason, `${operator} (${role})`);
+            return res.lastInsertRowid;
+        }
+    },
+    getTransactionById: (id) => {
+        return db.prepare('SELECT * FROM stock_transactions WHERE id = ?').get(id);
+    },
+    markTransactionReversed: (id) => {
+        const txCols = new Set(db.prepare("PRAGMA table_info(stock_transactions)").all().map(c => c.name));
+        if (txCols.has('is_reversed')) {
+            db.prepare('UPDATE stock_transactions SET is_reversed = 1 WHERE id = ?').run(id);
+        }
     },
     getTransactions: (itemId = null, limit = 200) => {
         if (itemId) {

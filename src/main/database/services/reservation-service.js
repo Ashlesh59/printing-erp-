@@ -9,14 +9,22 @@ const ReservationService = {
     // 1. Reserves stock for an order
     reserve: (orderId, orderData, operator = 'System', role = 'System') => {
         const transaction = db.transaction(() => {
+            // Guard against duplicate active reservations for same order
+            if (orderId) {
+                const existing = db.prepare("SELECT COUNT(*) as count FROM inventory_reservations WHERE order_id = ? AND status = 'Active'").get(orderId);
+                if (existing && existing.count > 0) {
+                    return { success: true, message: 'Active reservations already exist for order' };
+                }
+            }
+
             const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId);
             const itemsToDeduct = [];
             
             if (items.length > 0) {
                 for (const item of items) {
                     const itemData = {
-                        pages: item.pages,
-                        copies: item.copies,
+                        pages: item.pages || item.physical_sheets || 1,
+                        copies: item.copies || 1,
                         paperId: item.paper_id,
                         paperSize: item.paper_size,
                         printType: item.print_type,
@@ -26,14 +34,14 @@ const ReservationService = {
                     const deducted = ReservationService.resolveOrderRequirements(itemData);
                     itemsToDeduct.push(...deducted);
                 }
-            } else {
+            } else if (orderData) {
                 const deducted = ReservationService.resolveOrderRequirements(orderData);
                 itemsToDeduct.push(...deducted);
             }
 
             if (itemsToDeduct.length === 0) return { success: true };
 
-            const locationId = parseInt(orderData.locationId) || 1;
+            const locationId = parseInt(orderData?.locationId) || 1;
 
             // Check stock availability
             const settings = db.prepare('SELECT allow_negative_stock FROM inventory_settings WHERE id = 1').get();
@@ -41,11 +49,13 @@ const ReservationService = {
 
             for (const req of itemsToDeduct) {
                 const item = InventoryRepository.getItemById(req.itemId);
-                if (!item) continue;
+                if (!item) {
+                    throw new Error(`Inventory item #${req.itemId} not found during reservation.`);
+                }
 
-                const available = item.current_stock - item.reserved_stock;
+                const available = item.current_stock - (item.reserved_stock || 0);
                 if (available < req.qty && !allowNegative) {
-                    throw new Error(`Insufficient stock for "${item.name}". Required: ${req.qty}, Available: ${available}`);
+                    throw new Error(`Insufficient available stock for "${item.name}". Required: ${req.qty}, Available: ${available}`);
                 }
             }
 
@@ -54,11 +64,14 @@ const ReservationService = {
                 const item = InventoryRepository.getItemById(req.itemId);
                 const locStock = InventoryRepository.getLocationStock(req.itemId, locationId);
 
+                const newReservedGlobal = (item.reserved_stock || 0) + req.qty;
+                const newReservedLoc = (locStock.reserved_stock || 0) + req.qty;
+
                 // Update global item reserved stock
-                InventoryRepository.updateItemReservation(req.itemId, item.reserved_stock + req.qty);
+                InventoryRepository.updateItemReservation(req.itemId, newReservedGlobal);
 
                 // Update location stock level reserved stock
-                InventoryRepository.updateLocationReservation(req.itemId, locationId, locStock.reserved_stock + req.qty);
+                InventoryRepository.updateLocationReservation(req.itemId, locationId, newReservedLoc);
 
                 // Record reservation record
                 ReservationRepository.createReservation(orderId, req.itemId, locationId, req.qty);
@@ -80,14 +93,15 @@ const ReservationService = {
                 if (res.status !== 'Active') continue;
 
                 const item = InventoryRepository.getItemByIdRaw(res.item_id);
+                if (!item) continue;
                 const locStock = InventoryRepository.getLocationStock(res.item_id, res.location_id);
 
                 // Compute updated stock levels
                 const newCurrentGlobal = item.current_stock - res.qty_reserved;
-                const newReservedGlobal = Math.max(0, item.reserved_stock - res.qty_reserved);
+                const newReservedGlobal = Math.max(0, (item.reserved_stock || 0) - res.qty_reserved);
 
                 const newCurrentLoc = locStock.current_stock - res.qty_reserved;
-                const newReservedLoc = Math.max(0, locStock.reserved_stock - res.qty_reserved);
+                const newReservedLoc = Math.max(0, (locStock.reserved_stock || 0) - res.qty_reserved);
 
                 // Write to database
                 InventoryRepository.updateItemStock(res.item_id, newCurrentGlobal);
@@ -105,7 +119,13 @@ const ReservationService = {
                 InventoryService.checkStockAlerts(res.item_id);
             }
 
-            ReservationRepository.updateReservationStatus(orderId, 'Fulfilled');
+            // Update reservation status to Consumed (or Fulfilled)
+            try {
+                db.prepare("UPDATE inventory_reservations SET status = 'Consumed', updated_at = CURRENT_TIMESTAMP WHERE order_id = ? AND status = 'Active'").run(orderId);
+            } catch (e) {
+                ReservationRepository.updateReservationStatus(orderId, 'Consumed');
+            }
+
             EventRepository.logEvent('ReservationFulfilled', orderId, {}, operator, role, 'Stock consumed successfully');
             return { success: true };
         });
@@ -122,54 +142,44 @@ const ReservationService = {
                 if (res.status !== 'Active') continue;
 
                 const item = InventoryRepository.getItemByIdRaw(res.item_id);
+                if (!item) continue;
                 const locStock = InventoryRepository.getLocationStock(res.item_id, res.location_id);
 
-                const newReservedGlobal = Math.max(0, item.reserved_stock - res.qty_reserved);
-                const newReservedLoc = Math.max(0, locStock.reserved_stock - res.qty_reserved);
+                const newReservedGlobal = Math.max(0, (item.reserved_stock || 0) - res.qty_reserved);
+                const newReservedLoc = Math.max(0, (locStock.reserved_stock || 0) - res.qty_reserved);
 
                 InventoryRepository.updateItemReservation(res.item_id, newReservedGlobal);
                 InventoryRepository.updateLocationReservation(res.item_id, res.location_id, newReservedLoc);
             }
 
-            ReservationRepository.updateReservationStatus(orderId, 'Released');
+            try {
+                db.prepare("UPDATE inventory_reservations SET status = 'Released', updated_at = CURRENT_TIMESTAMP WHERE order_id = ? AND status = 'Active'").run(orderId);
+            } catch (e) {
+                ReservationRepository.updateReservationStatus(orderId, 'Released');
+            }
+
             EventRepository.logEvent('ReservationReleased', orderId, {}, operator, role, 'Stock reservation cancelled');
             return { success: true };
         });
         return transaction();
     },
 
-    // 4. Undoes completed stock deductions (e.g. order cancelled *after* completion)
+    // Alias for cancel
+    cancel: (orderId, operator = 'System', role = 'System') => {
+        return ReservationService.release(orderId, operator, role);
+    },
+
+    // 4. Undoes completed stock deductions safely using exact reversals
     undoDeduction: (orderId, operator = 'System', role = 'System') => {
         const transaction = db.transaction(() => {
-            // Find all order transactions for this order
-            const txs = db.prepare("SELECT * FROM stock_transactions WHERE reference_type = 'order' AND reference_id = ?").all(orderId);
+            const txs = db.prepare("SELECT * FROM stock_transactions WHERE reference_type = 'order' AND reference_id = ? AND (is_reversed = 0 OR is_reversed IS NULL) AND qty < 0").all(orderId);
             if (txs.length === 0) return { success: true };
 
             for (const tx of txs) {
-                const item = InventoryRepository.getItemByIdRaw(tx.item_id);
-                if (!item) continue;
-
-                const qtyToRestock = Math.abs(tx.qty);
-                const defaultLocId = item.storage_location_id || 1;
-                const locStock = InventoryRepository.getLocationStock(tx.item_id, defaultLocId);
-
-                // Add back to stocks
-                InventoryRepository.updateItemStock(tx.item_id, item.current_stock + qtyToRestock);
-                InventoryRepository.updateLocationStock(tx.item_id, defaultLocId, locStock.current_stock + qtyToRestock);
-
-                // Log Offset Transaction
-                InventoryRepository.addTransaction(
-                    tx.item_id, 'manual_in', qtyToRestock, tx.cost,
-                    'order', orderId, `Restocked voided Order #${orderId}`, operator, role
-                );
-
-                InventoryService.checkStockAlerts(tx.item_id);
+                InventoryService.reverseTransaction(tx.id, `Reversal of Order #${orderId} deduction`, operator, role);
             }
-
-            // Remove/Clear PO log references
-            db.prepare("DELETE FROM stock_transactions WHERE reference_type = 'order' AND reference_id = ? AND qty < 0").run(orderId);
             
-            EventRepository.logEvent('StockRestored', orderId, {}, operator, role, 'Order cancelled, stock restored');
+            EventRepository.logEvent('StockRestored', orderId, {}, operator, role, 'Order cancelled, stock restored via exact reversals');
             return { success: true };
         });
         return transaction();
@@ -186,7 +196,7 @@ const ReservationService = {
         const profileId = orderData.print_profile_id || orderData.printProfileId;
         if (profileId) {
             try {
-                const profile = db.prepare('SELECT recipe_id, pricing_id, paper_size FROM print_profiles WHERE id = ?').get(profileId);
+                const profile = db.prepare('SELECT * FROM print_profiles WHERE id = ?').get(profileId);
                 if (profile) {
                     if (profile.recipe_id) {
                         const recipeItems = RecipeService.calculateRecipeConsumptionDirect(profile.recipe_id, context);
@@ -201,17 +211,19 @@ const ReservationService = {
                             itemsToDeduct.push(...recipeItems);
                             resolvedFromProfile = true;
                         } else {
-                            const pricingRecord = db.prepare('SELECT inventory_item_id FROM pricing WHERE id = ?').get(profile.pricing_id);
-                            if (pricingRecord && pricingRecord.inventory_item_id) {
-                                const sides = (orderData.sides || '').toLowerCase();
-                                const isDouble = sides.includes('double') || sides.includes('duplex') || sides.includes('2-sided') || sides.includes('two');
-                                const sheetsCount = isDouble ? Math.ceil(context.pages / 2) * context.copies : context.pages * context.copies;
-                                itemsToDeduct.push({
-                                    itemId: pricingRecord.inventory_item_id,
-                                    qty: sheetsCount
-                                });
-                                resolvedFromProfile = true;
-                            }
+                            try {
+                                const pricingRecord = db.prepare('SELECT inventory_item_id FROM pricing WHERE id = ?').get(profile.pricing_id);
+                                if (pricingRecord && pricingRecord.inventory_item_id) {
+                                    const sides = (orderData.sides || '').toLowerCase();
+                                    const isDouble = sides.includes('double') || sides.includes('duplex') || sides.includes('2-sided') || sides.includes('two');
+                                    const sheetsCount = isDouble ? Math.ceil(context.pages / 2) * context.copies : context.pages * context.copies;
+                                    itemsToDeduct.push({
+                                        itemId: pricingRecord.inventory_item_id,
+                                        qty: sheetsCount
+                                    });
+                                    resolvedFromProfile = true;
+                                }
+                            } catch(e) {}
                         }
                     }
                 }
@@ -222,47 +234,61 @@ const ReservationService = {
 
         // 1. Resolve Paper stock requirement (Fallback)
         if (!resolvedFromProfile && orderData.paperId) {
-            // Check if recipe is configured
-            const recipeItems = RecipeService.calculateRecipeConsumption(orderData.paperId, context);
-            if (recipeItems.length > 0) {
-                itemsToDeduct.push(...recipeItems);
+            // Direct inventory item link
+            const directItem = db.prepare("SELECT id FROM inventory_items WHERE id = ? AND status != 'Deleted'").get(orderData.paperId);
+            if (directItem) {
+                const sides = (orderData.sides || '').toLowerCase();
+                const isDouble = sides.includes('double') || sides.includes('duplex') || sides.includes('2-sided') || sides.includes('two');
+                const sheetsCount = isDouble ? Math.ceil(context.pages / 2) * context.copies : context.pages * context.copies;
+                itemsToDeduct.push({
+                    itemId: directItem.id,
+                    qty: sheetsCount
+                });
+                resolvedFromProfile = true;
             } else {
-                // Check direct link fallback
-                const pricingRecord = db.prepare('SELECT inventory_item_id FROM pricing WHERE id = ?').get(orderData.paperId);
-                if (pricingRecord && pricingRecord.inventory_item_id) {
-                    // Standard sheets calculation logic
-                    const sides = (orderData.sides || '').toLowerCase();
-                    const isDouble = sides.includes('double') || sides.includes('duplex') || sides.includes('2-sided') || sides.includes('two');
-                    const sheetsCount = isDouble ? Math.ceil(context.pages / 2) * context.copies : context.pages * context.copies;
-                    
-                    itemsToDeduct.push({
-                        itemId: pricingRecord.inventory_item_id,
-                        qty: sheetsCount
-                    });
-                } else {
-                    // Smart String Match legacy fallback
-                    const size = orderData.paperSize || 'A4';
-                    const pType = orderData.printType || 'bw';
-                    const fallbackItem = db.prepare(`
-                        SELECT i.id FROM inventory_items i
-                        JOIN inventory_categories c ON i.category_id = c.id
-                        WHERE c.name = 'Paper' AND i.status = 'Active'
-                          AND i.size LIKE ? AND (i.color_type = ? OR i.name LIKE ?)
-                        LIMIT 1
-                    `).get(`%${size}%`, pType, `%${pType === 'color' ? 'color' : 'bw'}%`);
-
-                    if (fallbackItem) {
-                        const sides = (orderData.sides || '').toLowerCase();
-                        const isDouble = sides.includes('double') || sides.includes('duplex') || sides.includes('2-sided') || sides.includes('two');
-                        const sheetsCount = isDouble ? Math.ceil(context.pages / 2) * context.copies : context.pages * context.copies;
-                        
-                        itemsToDeduct.push({
-                            itemId: fallbackItem.id,
-                            qty: sheetsCount
-                        });
+                // Check if pricing recipe or direct link
+                try {
+                    const recipeItems = RecipeService.calculateRecipeConsumption(orderData.paperId, context);
+                    if (recipeItems.length > 0) {
+                        itemsToDeduct.push(...recipeItems);
+                        resolvedFromProfile = true;
+                    } else {
+                        const pricingRecord = db.prepare('SELECT inventory_item_id FROM pricing WHERE id = ?').get(orderData.paperId);
+                        if (pricingRecord && pricingRecord.inventory_item_id) {
+                            const sides = (orderData.sides || '').toLowerCase();
+                            const isDouble = sides.includes('double') || sides.includes('duplex') || sides.includes('2-sided') || sides.includes('two');
+                            const sheetsCount = isDouble ? Math.ceil(context.pages / 2) * context.copies : context.pages * context.copies;
+                            itemsToDeduct.push({
+                                itemId: pricingRecord.inventory_item_id,
+                                qty: sheetsCount
+                            });
+                            resolvedFromProfile = true;
+                        }
                     }
-                }
+                } catch (e) {}
             }
+        }
+
+        // Smart String Match legacy fallback
+        const size = orderData.paperSize || 'A4';
+        const pType = orderData.printType || 'bw';
+        const fallbackItem = db.prepare(`
+            SELECT i.id FROM inventory_items i
+            JOIN inventory_categories c ON i.category_id = c.id
+            WHERE c.name = 'Paper' AND i.status = 'Active'
+              AND i.size LIKE ? AND (i.color_type = ? OR i.name LIKE ?)
+            LIMIT 1
+        `).get(`%${size}%`, pType, `%${pType === 'color' ? 'color' : 'bw'}%`);
+
+        if (fallbackItem) {
+            const sides = (orderData.sides || '').toLowerCase();
+            const isDouble = sides.includes('double') || sides.includes('duplex') || sides.includes('2-sided') || sides.includes('two');
+            const sheetsCount = isDouble ? Math.ceil(context.pages / 2) * context.copies : context.pages * context.copies;
+            
+            itemsToDeduct.push({
+                itemId: fallbackItem.id,
+                qty: sheetsCount
+            });
         }
 
         // 2. Resolve Extra item stock requirements

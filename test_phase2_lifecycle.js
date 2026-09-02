@@ -234,7 +234,7 @@ async function runAllTests() {
         customerName: 'Full Paid Customer',
         customerPhone: '9876543214',
         items: [{ filePath: sampleDocPath, paperSize: 'A4', printType: 'bw', pages: 5 }],
-        payment: { amount: 100, method: 'UPI' }
+        payment: { amount: 10, method: 'UPI' }
     });
     assert(fullOrder.paymentStatus === 'Paid', 'Order marked Paid');
     const dbFull = db.prepare('SELECT * FROM orders WHERE id = ?').get(fullOrder.orderId);
@@ -293,13 +293,19 @@ async function runAllTests() {
     assert(repeatCancelRes.alreadyCancelled === true, 'Flags alreadyCancelled');
 
     // -----------------------------------------------------------------
-    // Scenario 14: Paid order cancellation flags payment as Refunded
+    // Scenario 14: Paid order cancellation maintains payment integrity; explicit recordRefund processes refund
     // -----------------------------------------------------------------
-    console.log('\nScenario 14: Paid order cancellation flags Refunded');
+    console.log('\nScenario 14: Paid order cancellation and explicit refunding');
     const cancelPaidRes = OrderService.cancelOrder(mockOperatorSender, fullOrder.orderId, 'Defective file');
     assert(cancelPaidRes.success === true, 'Paid order cancelled');
+    const dbCancelledPaid = db.prepare('SELECT * FROM orders WHERE id = ?').get(fullOrder.orderId);
+    assert(dbCancelledPaid.payment_status === 'Paid', 'Order cancellation preserves Paid status without fake refunds');
+
+    const refundRes = OrderService.recordRefund(mockOperatorSender, fullOrder.orderId, fullOrder.grandTotal, 'Refund due to cancellation');
+    assert(refundRes.success === true, 'Explicit refund processed successfully');
+    assert(refundRes.paymentStatus === 'Refunded', 'Payment status updated to Refunded after explicit refund');
     const dbRefunded = db.prepare('SELECT * FROM orders WHERE id = ?').get(fullOrder.orderId);
-    assert(dbRefunded.payment_status === 'Refunded', 'Payment status is Refunded');
+    assert(dbRefunded.payment_status === 'Refunded', 'DB Payment status is Refunded');
     const dbRefundedInv = db.prepare('SELECT * FROM gst_invoices WHERE order_id = ?').get(fullOrder.orderId);
     assert(dbRefundedInv.payment_status === 'Refunded', 'Invoice payment status is Refunded');
 
@@ -457,6 +463,22 @@ async function runAllTests() {
     // Scenario 25: Unauthorized Role Rejected on Protected IPC channels
     // -----------------------------------------------------------------
     console.log('\nScenario 25: IPC Guard role authorization check');
+    const { LicenseService } = require('./src/main/security/license-service');
+    const testKey = crypto.generateKeyPairSync('ed25519');
+    LicenseService.setVerificationPublicKey(testKey.publicKey);
+    const testPayload = {
+        license_id: 'LIC-P2-001',
+        product: 'PrintShopManager',
+        tier: 'PRO',
+        issued_at: '2026-01-01',
+        expires_at: '2028-12-31',
+        shop_name: 'Phase 2 Test Shop'
+    };
+    const payloadBuf = Buffer.from(JSON.stringify(testPayload), 'utf8');
+    const sig = crypto.sign(null, payloadBuf, testKey.privateKey);
+    const token = `PSM-ED25519.${payloadBuf.toString('base64')}.${sig.toString('base64')}`;
+    LicenseService.activateLicense(token);
+
     const guardedCancel = createGuardedWrapper('orders:cancel', ROLES.OPERATOR, (event, { orderId }) => {
         return OrderService.cancelOrder(event.sender, orderId);
     });

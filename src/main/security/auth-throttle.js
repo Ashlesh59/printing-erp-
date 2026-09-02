@@ -9,13 +9,18 @@ class AuthThrottle {
         this.tier1DurationMs = options.tier1DurationMs || 30 * 1000;
         this.tier2Threshold = options.tier2Threshold || 10;   // 10 fails -> 300s (5m) lockout
         this.tier2DurationMs = options.tier2DurationMs || 300 * 1000;
+        this.timeProvider = typeof options.timeProvider === 'function' ? options.timeProvider : () => Date.now();
         
         // Map of key (e.g. "role:ip" or "role:senderId") -> { failures: number, lockedUntil: number, lastFailure: number }
         this.records = new Map();
     }
 
+    _now() {
+        return this.timeProvider();
+    }
+
     _makeKey(senderId, role = 'General') {
-        return `${role.toUpperCase()}:${senderId || 'default'}`;
+        return `${String(role).toUpperCase()}:${senderId || 'default'}`;
     }
 
     /**
@@ -27,7 +32,7 @@ class AuthThrottle {
         const record = this.records.get(key);
         if (!record) return { locked: false, remainingSeconds: 0 };
 
-        const now = Date.now();
+        const now = this._now();
         if (record.lockedUntil && record.lockedUntil > now) {
             const remainingSeconds = Math.ceil((record.lockedUntil - now) / 1000);
             return { locked: true, remainingSeconds };
@@ -47,7 +52,7 @@ class AuthThrottle {
      */
     recordFailure(senderId, role = 'General') {
         const key = this._makeKey(senderId, role);
-        const now = Date.now();
+        const now = this._now();
         let record = this.records.get(key);
 
         if (!record) {
@@ -86,7 +91,7 @@ class AuthThrottle {
      * Cleans up expired records
      */
     cleanup() {
-        const now = Date.now();
+        const now = this._now();
         for (const [key, record] of this.records.entries()) {
             if (record.lockedUntil <= now && (now - record.lastFailure) > 3600 * 1000) {
                 this.records.delete(key);
@@ -102,4 +107,7 @@ class AuthThrottle {
     }
 }
 
-module.exports = new AuthThrottle();
+const singleton = new AuthThrottle();
+singleton.AuthThrottle = AuthThrottle;
+
+module.exports = singleton;
