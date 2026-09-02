@@ -16,7 +16,28 @@ const GstModel = require('./src/main/database/gst-model');
 const InventoryModel = require('./src/main/database/inventory-model');
 
 app.whenReady().then(async () => {
-    // Register IPC Handlers
+    // Auth & Session
+    ipcMain.handle('auth:get-session', () => ({ success: true, session: { role: 'Operator', user: { id: 1, name: 'Audit Operator', role: 'Operator' } } }));
+    ipcMain.handle('auth:login', () => ({ success: true, user: { id: 1, name: 'Audit Operator', role: 'Operator' }, role: 'Operator' }));
+    ipcMain.handle('auth:logout', () => ({ success: true }));
+
+    // Orders & Lifecycle (Phase 2)
+    const OrderService = require('./src/main/services/order-service');
+    ipcMain.handle('orders:submit', async (e, data) => await OrderService.submitOrder(e.sender, data));
+    ipcMain.handle('orders:cancel', async (e, { orderId, reason }) => OrderService.cancelOrder(e.sender, orderId, reason));
+    ipcMain.handle('orders:record-payment', async (e, data) => OrderService.recordPayment(e.sender, data));
+    ipcMain.handle('orders:retry-print', async (e, { orderId, options }) => await OrderService.retryPrint(e.sender, orderId, options));
+
+    // Printers & Hardware (Phase 3)
+    const PrinterDiscovery = require('./src/main/services/printing/printer-discovery');
+    const PrintQueueManager = require('./src/main/services/printing/print-queue-manager');
+    const PrintDiagnosticsService = require('./src/main/services/printing/print-diagnostics-service');
+    ipcMain.handle('printers:list', async () => await PrinterDiscovery.getPrinters());
+    ipcMain.handle('printers:get-capabilities', async (e, { printerName }) => await PrinterDiscovery.getCapabilities(printerName));
+    ipcMain.handle('printers:get-diagnostics', async () => await PrintDiagnosticsService.getDiagnostics());
+    ipcMain.handle('printers:get-queue-status', () => PrintQueueManager.getQueueStatus());
+    ipcMain.handle('printers:cancel-job', (e, { jobId, reason }) => PrintQueueManager.cancelJob(jobId, reason));
+
     ipcMain.handle('check-license', () => true);
     ipcMain.handle('get-license-info', () => LicenseModel.getLicense());
     ipcMain.handle('search-customers', (e, phone) => CustomerModel.searchByPhone(phone));
