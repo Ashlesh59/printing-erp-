@@ -3549,10 +3549,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.submitPin = async function() {
         if (lockoutInterval) return;
 
-        if (pinBuffer.length < 6) {
+        if (pinBuffer.length < 4) {
             const msgEl = document.getElementById('pin-lock-message');
             if (msgEl) {
-                msgEl.textContent = "PIN must be at least 6 digits.";
+                msgEl.textContent = "PIN must be at least 4 digits.";
                 msgEl.style.color = '#ef4444';
             }
             return;
