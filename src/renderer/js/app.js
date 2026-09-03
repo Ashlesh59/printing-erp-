@@ -1,27 +1,43 @@
-// ─── GLOBAL STABILITY & CRASH PREVENTION SHIELD ─────────────────────────────
+// ─── GLOBAL STABILITY & OBSERVABILITY ERROR SHIELD ───────────────────────────
 window.addEventListener('error', (event) => {
-    console.error('[PSM Global Error Guard]', event.error ? event.error.stack : event.message);
-    if (window.showToast) {
-        window.showToast('System recovered from unexpected issue', 'warning');
+    const errorDetails = event.error ? (event.error.stack || event.error.message) : event.message;
+    console.error('[PSM Global Error]', errorDetails);
+    if (window.api && window.api.logError) {
+        window.api.logError(`[Renderer Error] ${event.message} at ${event.filename}:${event.lineno}`);
     }
-    event.preventDefault();
 });
 
 window.addEventListener('unhandledrejection', (event) => {
-    console.error('[PSM Unhandled Rejection Guard]', event.reason ? (event.reason.stack || event.reason) : 'No reason');
-    if (window.showToast) {
-        window.showToast('Background operation completed', 'info');
+    const reasonDetails = event.reason ? (event.reason.stack || event.reason.message || String(event.reason)) : 'Unknown rejection';
+    console.error('[PSM Unhandled Rejection]', reasonDetails);
+    if (window.api && window.api.logError) {
+        window.api.logError(`[Renderer Unhandled Rejection] ${reasonDetails}`);
     }
-    event.preventDefault();
 });
 
-window.refreshAllWorkspaces = function() {
-    if (typeof window.loadDashboard === 'function') window.loadDashboard();
-    if (typeof window.loadOrderHistory === 'function') window.loadOrderHistory();
-    if (typeof window.loadCustomerWorkspace === 'function') window.loadCustomerWorkspace();
-    if (typeof window.loadProductionDashboard === 'function') window.loadProductionDashboard();
-    if (typeof window.loadProductionWorkspace === 'function') window.loadProductionWorkspace();
-    if (typeof window.loadProductionJobs === 'function') window.loadProductionJobs();
+window.refreshAllWorkspaces = function(targetView = null) {
+    const isViewActive = (id) => {
+        const el = document.getElementById(id);
+        return el && el.classList.contains('active');
+    };
+
+    // Keep dashboard metrics and recent counts updated
+    if (typeof window.loadDashboard === 'function' && (isViewActive('dashboard') || !targetView)) {
+        window.loadDashboard();
+    }
+    // Refresh Order History if active or explicitly targeted
+    if (typeof window.loadOrderHistory === 'function' && (isViewActive('history') || targetView === 'history')) {
+        window.loadOrderHistory();
+    }
+    // Refresh Customer Workspace if active
+    if (typeof window.loadCustomerWorkspace === 'function' && (isViewActive('customers') || targetView === 'customers')) {
+        window.loadCustomerWorkspace();
+    }
+    // Refresh Production if active
+    if (isViewActive('production') || targetView === 'production') {
+        if (typeof window.loadProductionDashboard === 'function') window.loadProductionDashboard();
+        else if (typeof window.loadProductionWorkspace === 'function') window.loadProductionWorkspace();
+    }
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -2269,12 +2285,30 @@ document.addEventListener('DOMContentLoaded', async () => {
         const elCust = document.getElementById('sched-modal-customer-name');
         const elDate = document.getElementById('sched-input-date');
 
-        if (elTitle) elTitle.textContent = orderData ? (orderData.file_name || orderData.name || 'Custom Print Job') : 'New Print Order';
-        if (elCust) elCust.textContent = `Customer: ${orderData ? (orderData.customer_name || orderData.name || (document.getElementById('setup-name')?.value) || 'Walk-in Customer') : 'Walk-in Customer'}`;
+        const isExistingProdJob = Boolean(orderData && (orderData.productionJobId || (orderData.id && orderData.status)));
+        if (isExistingProdJob) {
+            window.currentJobToSchedule = {
+                type: 'PRODUCTION_JOB_RESCHEDULE',
+                productionJobId: orderData.productionJobId || orderData.id,
+                orderId: orderData.order_id || null,
+                ...orderData
+            };
+        } else {
+            window.currentJobToSchedule = null;
+        }
+
+        const customerName = orderData ? (orderData.customer_name || orderData.name || (document.getElementById('setup-name')?.value) || 'Walk-in Customer') : 'Walk-in Customer';
+        const jobTitle = orderData ? (orderData.job_name || orderData.product_name || orderData.file_name || 'Custom Print Job') : 'New Print Order';
+
+        if (elTitle) elTitle.textContent = customerName;
+        if (elCust) elCust.textContent = `Job: ${jobTitle}${isExistingProdJob ? ` • Production Job #${orderData.productionJobId || orderData.id}` : ''}`;
+        
         if (elDate) {
-            const today = new Date().toISOString().split('T')[0];
+            const today = (orderData && (orderData.scheduled_start || orderData.due_time)) ? 
+                new Date(orderData.scheduled_start || orderData.due_time).toISOString().split('T')[0] : 
+                new Date().toISOString().split('T')[0];
             elDate.value = today;
-            const now = new Date();
+            const now = new Date(today);
             miniCalYear = now.getFullYear();
             miniCalMonth = now.getMonth();
         }

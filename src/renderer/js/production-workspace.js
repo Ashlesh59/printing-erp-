@@ -247,8 +247,12 @@
     // ──────────────────────────────────────────────────────────────
     // ENTERPRISE JOB CARD RENDERER (STRICT 4-SECTION DESIGN)
     // ──────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────
+    // ENTERPRISE JOB CARD RENDERER (CUSTOMER-FIRST HIERARCHY)
+    // ──────────────────────────────────────────────────────────────
     function renderJobCardHtml(j) {
         const customerName = escapeHtml(j.customer_name || 'Walk-in Customer');
+        const customerPhone = j.customer_phone ? escapeHtml(j.customer_phone) : '';
         const jobProduct = escapeHtml(j.job_name || j.product_name || (j.paper_size ? `${j.paper_size} Print` : 'Print Order'));
         const fileName = escapeHtml(j.file_name || 'Attached_Document.pdf');
         const targetDateObj = (j.scheduled_start || j.due_time) ? new Date(j.scheduled_start || j.due_time) : null;
@@ -276,20 +280,25 @@
 
         return `
             <div class="ps-job-card" data-job-id="${j.id}" draggable="true" onclick="window.selectProductionJob(${j.id})">
-                <!-- Top Row: Customer Avatar, Customer Name, Three Dot Menu -->
+                <!-- Top Row: Customer Avatar, Customer Name (Primary), Phone (Secondary), Three Dot Menu -->
                 <div class="ps-card-top-row">
                     <div class="ps-cust-profile">
                         <div class="ps-cust-avatar" title="${customerName}">${avatarInitials}</div>
-                        <span class="ps-cust-name" title="${customerName}">👤 ${customerName}</span>
+                        <div style="display: flex; flex-direction: column; overflow: hidden;">
+                            <span class="ps-cust-name" title="${customerName}" style="font-weight: 700; color: var(--text-primary, #0f172a);">👤 ${customerName}</span>
+                            ${customerPhone ? `<span class="ps-cust-phone" style="font-size: 0.76rem; color: var(--text-secondary, #64748b);">📞 ${customerPhone}</span>` : ''}
+                        </div>
                     </div>
                     <button class="ps-card-menu-btn" onclick="event.stopPropagation(); window.toggleJobContextMenu(event, ${j.id})" title="Actions">⋮</button>
                 </div>
 
-                <!-- Second Section: Job Name -->
-                <div class="ps-card-job-name" title="${jobProduct}">${jobProduct}</div>
+                <!-- Second Section: Order Number & Product (Third) -->
+                <div class="ps-card-job-name" title="${jobProduct}" style="font-size: 0.86rem; margin-top: 6px;">
+                    <span style="font-weight: 600; color: var(--text-primary, #1e293b);">${j.order_id ? `#${j.order_id} • ` : ''}${jobProduct}</span>
+                </div>
 
-                <!-- Third Section: File Name (Single line with ellipsis) -->
-                <div class="ps-card-file-name" title="${fileName}">
+                <!-- Third Section: File Name (Supporting detail with title tooltip) -->
+                <div class="ps-card-file-name" title="File: ${fileName}">
                     <span class="ps-file-icon">📄</span>
                     <span class="ps-file-text">${fileName}</span>
                 </div>
@@ -317,7 +326,7 @@
                 <!-- Bottom Row: Status Badge -->
                 <div class="ps-card-bottom-row">
                     ${statusPillHtml}
-                    <span class="ps-order-id-tag">#${j.id}</span>
+                    <span class="ps-order-id-tag">Job #${j.id}</span>
                 </div>
             </div>
         `;
@@ -558,6 +567,16 @@
     // ──────────────────────────────────────────────────────────────
     // THREE-DOT CONTEXT MENU ENGINE
     // ──────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────
+    // SCOPED ACTION MUTEX GUARDS (PER-JOB AND PER-ACTION LOCKING)
+    // ──────────────────────────────────────────────────────────────
+    const activeProdJobActions = new Set();
+    const isJobActionBusy = (jobId, action) => activeProdJobActions.has(`${jobId}:${action}`);
+    const setJobActionBusy = (jobId, action, busy) => busy ? activeProdJobActions.add(`${jobId}:${action}`) : activeProdJobActions.delete(`${jobId}:${action}`);
+
+    // ──────────────────────────────────────────────────────────────
+    // THREE-DOT CONTEXT MENU ENGINE
+    // ──────────────────────────────────────────────────────────────
     window.toggleJobContextMenu = function(e, jobId) {
         e.stopPropagation();
         let menu = document.getElementById('ps-job-context-menu');
@@ -625,6 +644,8 @@
 
     window.deleteProductionJob = async function(jobId) {
         if (!window.api || !window.api.productionDeleteJob) return;
+        if (isJobActionBusy(jobId, 'delete')) return;
+        setJobActionBusy(jobId, 'delete', true);
         try {
             const res = await window.api.productionDeleteJob(jobId);
             if (res.success) {
@@ -633,10 +654,15 @@
             }
         } catch(e) {
             if (window.showToast) window.showToast("Error deleting job: " + e.message, "error");
+        } finally {
+            setJobActionBusy(jobId, 'delete', false);
         }
     };
 
     window.assignPrinterModal = async function(jobId) {
+        if (isJobActionBusy(jobId, 'assignPrinter')) return;
+        setJobActionBusy(jobId, 'assignPrinter', true);
+
         const printers = availablePrintersList.length > 0 ? availablePrintersList : [
             { name: 'EPSON L3210 Series' },
             { name: 'Canon imageRUNNER 2630' },
@@ -679,7 +705,10 @@
             const cancelBtn = modal.querySelector('#assign-printer-cancel');
             const confirmBtn = modal.querySelector('#assign-printer-confirm');
 
-            const cleanup = () => { modal.style.display = 'none'; };
+            const cleanup = () => { 
+                modal.style.display = 'none'; 
+                setJobActionBusy(jobId, 'assignPrinter', false);
+            };
 
             cancelBtn.onclick = () => {
                 cleanup();
@@ -710,12 +739,17 @@
         const job = loadedJobs.find(j => j.id === jobId);
         if (!job) return;
         if (typeof window.openScheduleProductionModal === 'function') {
-            window.openScheduleProductionModal(job);
+            window.openScheduleProductionModal({
+                type: 'PRODUCTION_JOB_RESCHEDULE',
+                productionJobId: job.id,
+                orderId: job.order_id,
+                ...job
+            });
         }
     };
 
     // ──────────────────────────────────────────────────────────────
-    // NOTION-STYLE FLOATING SIDE SHEET
+    // NOTION-STYLE FLOATING SIDE SHEET (CUSTOMER-FIRST HIERARCHY)
     // ──────────────────────────────────────────────────────────────
     function openNotionSidesheet(job) {
         const sidesheet = document.getElementById('ps-notion-sidesheet');
@@ -779,7 +813,7 @@
         const product = job.job_name || job.product_name || (job.paper_size ? `${job.paper_size} Print` : 'Print Order');
 
         if (title) title.textContent = customer;
-        if (orderId) orderId.textContent = `${product} • Order #${job.id}`;
+        if (orderId) orderId.textContent = `${job.order_id ? `#${job.order_id} • ` : ''}${product} (Job #${job.id})`;
 
         const statusPill = getSoftStatusPill(job.status);
         const progressPct = job.progress_pct || (job.status === 'Ready' || job.status === 'Completed' || job.status === 'Delivered' ? 100 : (job.status === 'Printing' ? 50 : 10));
@@ -791,19 +825,19 @@
                 <div style="font-size: 0.8rem; font-weight: 700; color: var(--text-secondary);">Priority: <strong style="color:var(--text-primary);">${escapeHtml(job.priority || 'Normal')}</strong></div>
             </div>
 
-            <!-- Single Source of Truth Properties List -->
+            <!-- Single Source of Truth Properties List (Customer-First) -->
             <div style="display: flex; flex-direction: column; gap: 14px; background: #ffffff; border: 1px solid var(--border-color); border-radius: 14px; padding: 16px; margin-bottom: 20px;">
                 <div style="display: flex; justify-content: space-between; font-size: 0.88rem;">
                     <span style="color: var(--text-secondary);">👤 Customer</span>
                     <strong style="color: var(--text-primary);">${escapeHtml(customer)}</strong>
                 </div>
                 <div style="display: flex; justify-content: space-between; font-size: 0.88rem;">
-                    <span style="color: var(--text-secondary);">🗒️ Product / Job</span>
-                    <strong style="color: var(--text-primary);">${escapeHtml(product)}</strong>
-                </div>
-                <div style="display: flex; justify-content: space-between; font-size: 0.88rem;">
                     <span style="color: var(--text-secondary);">📞 Phone</span>
                     <strong style="color: var(--text-primary);">${escapeHtml(job.customer_phone || '--')}</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.88rem;">
+                    <span style="color: var(--text-secondary);">🗒️ Product / Job</span>
+                    <strong style="color: var(--text-primary);">${job.order_id ? `#${job.order_id} • ` : ''}${escapeHtml(product)}</strong>
                 </div>
                 <div style="display: flex; justify-content: space-between; font-size: 0.88rem;">
                     <span style="color: var(--text-secondary);">📄 Paper &amp; Stock</span>
@@ -819,7 +853,7 @@
                 </div>
                 <div style="display: flex; justify-content: space-between; font-size: 0.88rem;">
                     <span style="color: var(--text-secondary);">📁 Original File Name</span>
-                    <span style="color: var(--text-secondary); font-size: 0.82rem; font-style: italic; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(job.file_name || 'No file attached')}</span>
+                    <span style="color: var(--text-secondary); font-size: 0.82rem; font-style: italic; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(job.file_name || 'No file attached')}">${escapeHtml(job.file_name || 'No file attached')}</span>
                 </div>
             </div>
 
@@ -868,8 +902,53 @@
     }
 
     // ──────────────────────────────────────────────────────────────
-    // HELPERS & GLOBAL BINDINGS
+    // AUTHORITATIVE REPRINT & ACTION CONTROLLERS
     // ──────────────────────────────────────────────────────────────
+    window.reprintProductionJob = async function(jobId) {
+        if (isJobActionBusy(jobId, 'reprint')) return;
+        setJobActionBusy(jobId, 'reprint', true);
+
+        try {
+            const job = loadedJobs.find(j => j.id === jobId);
+            if (!job) throw new Error('Job not found in loaded queue');
+
+            if (!window.api || !window.api.printFile) {
+                throw new Error('Print service API is not available');
+            }
+
+            const printPayload = {
+                filePath: job.file_path || null,
+                fileName: job.file_name || 'Document.pdf',
+                orderId: job.order_id || null
+            };
+
+            const printOptions = {
+                printerName: job.assigned_printer || 'Default',
+                printType: job.color_mode || 'B&W',
+                paperSize: job.paper_size || 'A4',
+                copies: job.copies || 1,
+                orderId: job.order_id || null
+            };
+
+            const res = await window.api.printFile(printPayload, printOptions);
+            if (res && res.success) {
+                if (window.showToast) window.showToast(`Reprint queued for Job #${jobId} on ${printOptions.printerName}!`, 'success');
+            } else {
+                const err = res ? res.error : 'Printer offline or unreachable';
+                if (window.showPrinterErrorModal) {
+                    window.showPrinterErrorModal(err, printPayload, printOptions);
+                } else if (window.showToast) {
+                    window.showToast(`Reprint warning: ${err}`, 'warning');
+                }
+            }
+        } catch(e) {
+            console.error('[Production] Reprint failed:', e);
+            if (window.showToast) window.showToast('Reprint failed: ' + e.message, 'error');
+        } finally {
+            setJobActionBusy(jobId, 'reprint', false);
+        }
+    };
+
     window.selectProductionJob = function (jobId) {
         selectedJobId = jobId;
         const job = loadedJobs.find(j => j.id === jobId);
@@ -878,27 +957,43 @@
 
     window.updateJobStatus = async function (jobId, newStatus) {
         if (!window.api || !window.api.productionUpdateStatus) return;
+        if (isJobActionBusy(jobId, 'updateStatus')) return;
+        setJobActionBusy(jobId, 'updateStatus', true);
+
         try {
             const res = await window.api.productionUpdateStatus(jobId, newStatus);
-            if (res.success) {
+            if (res && res.success) {
                 if (window.showToast) window.showToast(`Job #${jobId} status updated to ${newStatus}`, "success");
-                loadProductionDashboard();
+                await loadProductionDashboard();
+            } else {
+                const errMsg = res ? res.error : 'Failed to update job status';
+                if (window.showToast) window.showToast(errMsg, "error");
             }
         } catch (e) {
             if (window.showToast) window.showToast("Error updating status: " + e.message, "error");
+        } finally {
+            setJobActionBusy(jobId, 'updateStatus', false);
         }
     };
 
     window.duplicateProductionJob = async function (jobId) {
         if (!window.api || !window.api.productionDuplicateJob) return;
+        if (isJobActionBusy(jobId, 'duplicate')) return;
+        setJobActionBusy(jobId, 'duplicate', true);
+
         try {
             const res = await window.api.productionDuplicateJob(jobId);
-            if (res.success) {
+            if (res && res.success) {
                 if (window.showToast) window.showToast(`Duplicated Job #${jobId}`, "success");
-                loadProductionDashboard();
+                await loadProductionDashboard();
+            } else {
+                const errMsg = res ? res.error : 'Failed to duplicate job';
+                if (window.showToast) window.showToast(errMsg, "error");
             }
         } catch (e) {
             if (window.showToast) window.showToast("Error duplicating job: " + e.message, "error");
+        } finally {
+            setJobActionBusy(jobId, 'duplicate', false);
         }
     };
 

@@ -13,11 +13,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const billPrintedPages = document.getElementById('bill-printed-pages');
     const billCopies = document.getElementById('bill-copies');
     const billTotalCost = document.getElementById('bill-total-cost');
-    
-    const btnActionSavePrint = document.getElementById('btn-action-save-print');
-    const btnActionSaveOnly = document.getElementById('btn-action-save-only');
-    const btnActionPrintOnly = document.getElementById('btn-action-print-only');
-    const btnActionSaveLater = document.getElementById('btn-action-save-later');
 
     const toolbar = document.createElement('div');
     toolbar.id = 'floating-toolbar';
@@ -901,14 +896,20 @@ document.addEventListener('DOMContentLoaded', () => {
                     notes: notes
                 };
 
-                if (window.currentJobToSchedule && (window.currentJobToSchedule.id || window.currentJobToSchedule.jobId)) {
-                    const targetId = window.currentJobToSchedule.id || window.currentJobToSchedule.jobId;
+                if (window.currentJobToSchedule && (window.currentJobToSchedule.productionJobId || window.currentJobToSchedule.id)) {
+                    const targetId = window.currentJobToSchedule.productionJobId || window.currentJobToSchedule.id;
                     if (window.api && window.api.productionScheduleJob) {
-                        await window.api.productionScheduleJob(targetId, scheduleData);
+                        const res = await window.api.productionScheduleJob(targetId, scheduleData);
+                        if (!res || !res.success) {
+                            throw new Error(res ? res.error : 'Failed to reschedule production job');
+                        }
                     } else {
                         throw new Error('productionScheduleJob API is not available');
                     }
                     window.currentJobToSchedule = null;
+                    if (window.showToast) window.showToast(`Job #${targetId} rescheduled for ${schedDate} at ${schedTime}!`, 'success');
+                    if (typeof window.refreshAllWorkspaces === 'function') window.refreshAllWorkspaces('production');
+                    return;
                 } else {
                     if (typeof executeSave !== 'function') throw new Error('executeSave function is missing');
                     await executeSave('SCHEDULE', scheduleData);

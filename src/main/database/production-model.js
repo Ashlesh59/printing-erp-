@@ -241,6 +241,16 @@ const ProductionModel = {
                 return { success: false, error: 'Invalid status: ' + newStatus };
             }
 
+            const currentJob = db.prepare('SELECT * FROM production_jobs WHERE id = ?').get(jobId);
+            if (!currentJob) {
+                return { success: false, error: 'Production job not found: ' + jobId };
+            }
+
+            // Block invalid transitions from terminal states directly to printing
+            if ((currentJob.status === 'Completed' || currentJob.status === 'Cancelled') && newStatus === 'Printing') {
+                return { success: false, error: `Cannot transition from ${currentJob.status} to Printing directly.` };
+            }
+
             let extraSql = '';
             if (newStatus === 'Printing') {
                 extraSql = `, actual_start = COALESCE(actual_start, CURRENT_TIMESTAMP)`;
@@ -252,9 +262,46 @@ const ProductionModel = {
             stmt.run(newStatus, jobId);
 
             // Fetch job to update queue estimates
-            const job = db.prepare('SELECT assigned_printer FROM production_jobs WHERE id = ?').get(jobId);
-            if (job && job.assigned_printer) {
-                SmartScheduler.recalculatePrinterEstimates(job.assigned_printer);
+            if (currentJob.assigned_printer) {
+                SmartScheduler.recalculatePrinterEstimates(currentJob.assigned_printer);
+            }
+
+            // If order_id exists, inspect multi-job cardinality before updating order or fulfilling inventory
+            if (currentJob.order_id) {
+                const allOrderJobs = db.prepare('SELECT id, status FROM production_jobs WHERE order_id = ?').all(currentJob.order_id);
+                
+                if (newStatus === 'Completed' || newStatus === 'Delivered') {
+                    const allDone = allOrderJobs.every(j => j.status === 'Completed' || j.status === 'Delivered' || j.status === 'Cancelled');
+                    const hasAtLeastOneDelivered = allOrderJobs.some(j => j.status === 'Completed' || j.status === 'Delivered');
+                    
+                    if (allDone && hasAtLeastOneDelivered) {
+                        // Update order status to Completed
+                        db.prepare("UPDATE orders SET status = 'Completed' WHERE id = ? AND status != 'Cancelled'").run(currentJob.order_id);
+                        // Fulfill inventory reservations for this order (idempotent)
+                        try {
+                            const ReservationService = require('./services/reservation-service');
+                            if (ReservationService && typeof ReservationService.fulfill === 'function') {
+                                ReservationService.fulfill(currentJob.order_id, 'Production', 'Operator');
+                            }
+                        } catch (e) {
+                            console.error('[ProductionModel] Reservation fulfillment error:', e.message);
+                        }
+                    }
+                } else if (newStatus === 'Cancelled') {
+                    const allCancelled = allOrderJobs.every(j => j.status === 'Cancelled');
+                    if (allCancelled) {
+                        // All jobs cancelled -> Cancel the order and release inventory reservations
+                        db.prepare("UPDATE orders SET status = 'Cancelled' WHERE id = ? AND status != 'Completed'").run(currentJob.order_id);
+                        try {
+                            const ReservationService = require('./services/reservation-service');
+                            if (ReservationService && typeof ReservationService.release === 'function') {
+                                ReservationService.release(currentJob.order_id, 'Production', 'Job Cancellation');
+                            }
+                        } catch (e) {
+                            console.error('[ProductionModel] Reservation release error:', e.message);
+                        }
+                    }
+                }
             }
 
             return { success: true };
