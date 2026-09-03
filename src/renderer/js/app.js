@@ -3248,10 +3248,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Also keeps hidden selects in sync for downstream layout editor logic.
     async function loadExtrasForOrderSetup() {
         if (!window.api || !window.api.getPricing) return;
-        const allItems = await window.api.getPricing();
+        try {
+            const rawItems = await window.api.getPricing();
+            const allItems = Array.isArray(rawItems) ? rawItems : (rawItems && Array.isArray(rawItems.items) ? rawItems.items : []);
 
-        const paperItems = allItems.filter(i => i.category === 'paper');
-        const extraItems = allItems.filter(i => i.category === 'extra');
+            const paperItems = allItems.filter(i => i.category === 'paper');
+            const extraItems = allItems.filter(i => i.category === 'extra');
 
         // --- Paper type cards ---
         const paperContainer = document.getElementById('paper-options-container');
@@ -3352,6 +3354,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                     extrasContainer.appendChild(label);
                 });
             }
+        }
+        } catch (e) {
+            console.error("loadExtrasForOrderSetup error:", e);
         }
     }
 
@@ -3785,6 +3790,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.submitPin = async function() {
         if (lockoutInterval) return;
 
+        const inputEl = document.getElementById('pin-visible-input') || document.getElementById('pin-hidden-input');
+        const rawValue = (inputEl && inputEl.value ? inputEl.value : pinBuffer).replace(/\D/g, '').trim();
+        pinBuffer = rawValue;
+
         if (pinBuffer.length < 6) {
             const msgEl = document.getElementById('pin-lock-message');
             if (msgEl) {
@@ -3888,23 +3897,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     const keypadButtons = document.querySelectorAll('.pin-keypad .keypad-btn');
     keypadButtons.forEach(btn => {
         const text = btn.textContent.trim();
+        btn.onclick = null;
+        btn.removeAttribute('onclick');
         if (/^\d$/.test(text)) {
-            btn.removeAttribute('onclick');
-            btn.addEventListener('click', () => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
                 window.enterPinDigit(text);
             });
         } else if (text === 'Clear') {
-            btn.removeAttribute('onclick');
-            btn.addEventListener('click', () => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
                 window.clearPin();
             });
         } else if (text === '⌫') {
-            btn.removeAttribute('onclick');
-            btn.addEventListener('click', () => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
                 window.backspacePin();
             });
-        } else if (text === 'Cancel') {
-            btn.removeAttribute('onclick');
         }
     });
 
@@ -5193,8 +5205,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 ]);
                 
                 const [fetchedProducts, fetchedProfiles] = await Promise.race([fetchPromise, timeoutPromise]);
-                products = fetchedProducts || [];
-                profiles = fetchedProfiles || [];
+                products = Array.isArray(fetchedProducts) ? fetchedProducts : (fetchedProducts && Array.isArray(fetchedProducts.products) ? fetchedProducts.products : []);
+                profiles = Array.isArray(fetchedProfiles) ? fetchedProfiles : (fetchedProfiles && Array.isArray(fetchedProfiles.profiles) ? fetchedProfiles.profiles : []);
                 
                 // Cache successfully loaded data
                 productSelectorCache = { products, profiles };

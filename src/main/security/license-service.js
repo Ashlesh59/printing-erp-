@@ -16,6 +16,11 @@ const DEFAULT_PRODUCTION_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEALgE4Z6c0oY9gM2VqJj8f4k7wN1rB5xX3mQ8yL2pT1vA=
 -----END PUBLIC KEY-----`;
 
+// Offline Development & Local Verification Public Key (SPKI PEM Format)
+const DEV_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEA/RHF6wSqZFdL1/gk5ujSSDlvRh6ntkkGsiQwpd80tpg=
+-----END PUBLIC KEY-----`;
+
 class LicenseService {
     constructor() {
         this.publicKey = DEFAULT_PRODUCTION_PUBLIC_KEY;
@@ -92,7 +97,12 @@ class LicenseService {
 
         // Verify cryptographic Ed25519 signature
         try {
-            const isSignatureValid = crypto.verify(null, payloadBuf, this.publicKey, sigBuf);
+            let isSignatureValid = crypto.verify(null, payloadBuf, this.publicKey, sigBuf);
+            if (!isSignatureValid && !this._isPackaged()) {
+                try {
+                    isSignatureValid = crypto.verify(null, payloadBuf, DEV_PUBLIC_KEY, sigBuf);
+                } catch(e) {}
+            }
             if (!isSignatureValid) {
                 return {
                     valid: false,

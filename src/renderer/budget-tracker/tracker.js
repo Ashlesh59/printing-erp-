@@ -61,7 +61,8 @@ document.addEventListener('DOMContentLoaded', () => {
         let totalExpenses = 0;
         if (api.getInvPurchaseOrders) {
             try {
-                const pos = await api.getInvPurchaseOrders();
+                const rawPos = await api.getInvPurchaseOrders();
+                const pos = Array.isArray(rawPos) ? rawPos : [];
                 const received = pos.filter(po => po.status === 'Received');
                 totalExpenses = received.reduce((sum, po) => sum + (po.grand_total || 0), 0);
             } catch (err) {
@@ -69,8 +70,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        const grossSales = summary.totalGrand || 0;
-        const totalGst = (summary.totalCgst || 0) + (summary.totalSgst || 0) + (summary.totalIgst || 0);
+        const grossSales = (summary && typeof summary.totalGrand === 'number') ? summary.totalGrand : 0;
+        const totalGst = ((summary && summary.totalCgst) || 0) + ((summary && summary.totalSgst) || 0) + ((summary && summary.totalIgst) || 0);
         const netProfit = grossSales - totalExpenses;
 
         // Targets configuration
@@ -86,7 +87,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const statExpenses = document.getElementById('stat-expenses');
         const statProfit = document.getElementById('stat-profit');
         const statGst = document.getElementById('stat-gst');
-        if (statCount) statCount.textContent = summary.count || 0;
+        if (statCount) statCount.textContent = (summary && summary.count) || 0;
         if (statGross) statGross.textContent = `₹${grossSales.toFixed(2)}`;
         if (statExpenses) statExpenses.textContent = `₹${totalExpenses.toFixed(2)}`;
         if (statProfit) statProfit.textContent = `₹${netProfit.toFixed(2)}`;
@@ -108,15 +109,20 @@ document.addEventListener('DOMContentLoaded', () => {
     // 2. INVOICES HISTORY LIST
     async function loadInvoicesList() {
         if (!api || !api.getGstInvoices) return;
-        allInvoices = await api.getGstInvoices();
-        renderInvoices(allInvoices);
+        try {
+            const raw = await api.getGstInvoices();
+            allInvoices = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.invoices) ? raw.invoices : []);
+            renderInvoices(allInvoices);
+        } catch(e) {
+            console.error("Failed to load GST invoices:", e);
+        }
     }
 
     function renderInvoices(list) {
         if (!invoiceTbody) return;
         invoiceTbody.innerHTML = '';
         
-        if (list.length === 0) {
+        if (!Array.isArray(list) || list.length === 0) {
             invoiceTbody.innerHTML = '<tr><td colspan="7" class="empty-state">No GST invoices billed yet.</td></tr>';
             return;
         }

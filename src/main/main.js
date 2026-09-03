@@ -170,10 +170,13 @@ function createWindow() {
     // ==========================================
     registerGuardedHandler('auth:login', ROLES.PUBLIC, async (event, { pin, role = 'Any' }) => {
       const senderId = event.sender ? event.sender.id : null;
+      console.log(`[Auth:Login] Attempting login: role=${role}, pin length=${(pin || '').length}`);
       const result = await UserModel.verifyPin(pin, senderId, role);
       if (!result.success) {
+        console.warn(`[Auth:Login] Login failed: ${result.error}`);
         return result;
       }
+      console.log(`[Auth:Login] Login successful for user: ${result.user.name} (${result.user.role})`);
       const sessionRole = role === 'Shop' ? (result.user.role || 'Operator') : (role === 'Admin' ? 'Admin' : result.user.role);
       const session = sessionManager.createSession(event.sender, result.user, sessionRole);
       return {

@@ -93,10 +93,17 @@ document.addEventListener('DOMContentLoaded', () => {
     async function loadReferenceData() {
         if (!window.api) return;
         try {
-            allCategories = await window.api.getInvCategories();
-            allSuppliers = await window.api.getInvSuppliers();
-            allLocations = await window.api.getInvLocations();
-            allItems = await window.api.getInvItems();
+            const rawCats = await window.api.getInvCategories();
+            allCategories = Array.isArray(rawCats) ? rawCats : (rawCats && Array.isArray(rawCats.categories) ? rawCats.categories : []);
+
+            const rawSups = await window.api.getInvSuppliers();
+            allSuppliers = Array.isArray(rawSups) ? rawSups : (rawSups && Array.isArray(rawSups.suppliers) ? rawSups.suppliers : []);
+
+            const rawLocs = await window.api.getInvLocations();
+            allLocations = Array.isArray(rawLocs) ? rawLocs : (rawLocs && Array.isArray(rawLocs.locations) ? rawLocs.locations : []);
+
+            const rawItems = await window.api.getInvItems();
+            allItems = Array.isArray(rawItems) ? rawItems : (rawItems && Array.isArray(rawItems.items) ? rawItems.items : []);
 
             populateDropdowns();
             checkLowStockSystemBadge();
