@@ -112,6 +112,21 @@ const InventoryService = {
                 if (e.message.includes('active stock reservations')) throw e;
             }
 
+            // Block delete if referenced in open purchase orders
+            try {
+                const pendingPo = db.prepare(`
+                    SELECT COUNT(*) as count 
+                    FROM purchase_order_items poi
+                    JOIN purchase_orders po ON poi.po_id = po.id
+                    WHERE poi.item_id = ? AND po.status IN ('Draft', 'Approved', 'Ordered', 'Partially Received')
+                `).get(id);
+                if (pendingPo && pendingPo.count > 0) {
+                    throw new Error(`Cannot delete item "${item.name}" because it is part of ${pendingPo.count} open purchase orders.`);
+                }
+            } catch (e) {
+                if (e.message.includes('open purchase orders') || e.message.includes('active stock reservations')) throw e;
+            }
+
             InventoryRepository.softDeleteItem(id);
             eventBus.publish(EventTypes.INVENTORY_ADJUSTED, { itemId: id, isDeleted: true, name: item.name }, { sourceModule: 'InventoryService', userId: operator, role });
         });
@@ -235,20 +250,33 @@ const InventoryService = {
         if (!item) return;
 
         // Clear active alerts for item
-        db.prepare("DELETE FROM notifications WHERE reference_id = ? AND type IN ('low_stock', 'critical_stock')").run(itemId);
+        try {
+            db.prepare("DELETE FROM notifications WHERE reference_id = ? AND type IN ('low_stock', 'critical_stock')").run(itemId);
+            db.prepare("DELETE FROM inventory_alerts WHERE item_id = ? AND status = 'active'").run(itemId);
+        } catch (e) {}
 
         if (item.current_stock <= 0) {
+            const msg = `CRITICAL: "${item.name}" is OUT of stock! (Current: ${item.current_stock})`;
+            try {
+                db.prepare("INSERT INTO inventory_alerts (item_id, type, message, status) VALUES (?, 'out_of_stock', ?, 'active')").run(itemId, msg);
+            } catch (e) {}
+
             eventBus.publish(EventTypes.INVENTORY_LOW_STOCK, {
                 itemId,
                 type: 'critical_stock',
-                message: `CRITICAL: "${item.name}" is OUT of stock! (Current: 0)`,
+                message: msg,
                 priority: 'Critical'
             }, { sourceModule: 'InventoryService' });
         } else if (item.current_stock <= item.minimum_stock) {
+            const msg = `WARNING: "${item.name}" is running low. (Current: ${item.current_stock}, Minimum: ${item.minimum_stock})`;
+            try {
+                db.prepare("INSERT INTO inventory_alerts (item_id, type, message, status) VALUES (?, 'low_stock', ?, 'active')").run(itemId, msg);
+            } catch (e) {}
+
             eventBus.publish(EventTypes.INVENTORY_LOW_STOCK, {
                 itemId,
                 type: 'low_stock',
-                message: `WARNING: "${item.name}" is running low. (Current: ${item.current_stock}, Minimum: ${item.minimum_stock})`,
+                message: msg,
                 priority: 'High'
             }, { sourceModule: 'InventoryService' });
         }

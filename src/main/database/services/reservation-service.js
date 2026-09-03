@@ -169,6 +169,15 @@ const ReservationService = {
         return ReservationService.release(orderId, operator, role);
     },
 
+    // 3b. Updates order reservation (e.g. order item quantities adjusted before completion)
+    updateOrderReservation: (orderId, newOrderData, operator = 'System', role = 'System') => {
+        const transaction = db.transaction(() => {
+            ReservationService.release(orderId, operator, role);
+            return ReservationService.reserve(orderId, newOrderData, operator, role);
+        });
+        return transaction();
+    },
+
     // 4. Undoes completed stock deductions safely using exact reversals
     undoDeduction: (orderId, operator = 'System', role = 'System') => {
         const transaction = db.transaction(() => {

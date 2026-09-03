@@ -435,11 +435,18 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         tbody.innerHTML = filtered.map(item => {
+            const physicalStock = item.current_stock !== undefined ? item.current_stock : 0;
+            const reservedStock = item.reserved_stock !== undefined ? item.reserved_stock : 0;
+            const availableStock = physicalStock - reservedStock;
+
             let stockBadge = 'status-active';
-            if (item.current_stock <= 0) {
+            let stockBadgeText = 'In Stock';
+            if (physicalStock <= 0) {
                 stockBadge = 'status-out';
-            } else if (item.current_stock <= item.minimum_stock) {
+                stockBadgeText = 'Out of Stock';
+            } else if (physicalStock <= item.minimum_stock) {
                 stockBadge = 'status-low';
+                stockBadgeText = 'Low Stock';
             }
 
             const statusClass = item.status === 'Active' ? 'status-active' : 'status-inactive';
@@ -454,12 +461,20 @@ document.addEventListener('DOMContentLoaded', () => {
                     </td>
                     <td><span class="status-tag status-inactive" style="text-transform:none;">${escapeHtml(item.category_name || 'Uncategorized')}</span></td>
                     <td>
-                        <span class="status-tag ${stockBadge}">
-                            ${item.current_stock} / ${item.maximum_stock || '∞'} ${escapeHtml(item.unit)}
-                        </span>
+                        <div style="display: flex; flex-direction: column; gap: 3px;">
+                            <div>
+                                <span class="status-tag ${stockBadge}" style="display: inline-block; font-size: 0.75rem; padding: 2px 6px;">
+                                    ${stockBadgeText}
+                                </span>
+                                <strong style="margin-left: 6px; font-size: 0.88rem; color: var(--text-primary);">${physicalStock} ${escapeHtml(item.unit || 'Units')}</strong>
+                            </div>
+                            <small style="color: var(--text-secondary); font-size: 0.78rem;">
+                                Avail: <strong style="color: var(--text-primary);">${availableStock}</strong>${reservedStock > 0 ? ` • Res: <span style="color:#f59e0b; font-weight:600;">${reservedStock}</span>` : ''}
+                            </small>
+                        </div>
                     </td>
-                    <td>₹${item.purchase_price.toFixed(2)}</td>
-                    <td>₹${item.average_cost.toFixed(2)}</td>
+                    <td>₹${(item.purchase_price || 0).toFixed(2)}</td>
+                    <td>₹${(item.average_cost || 0).toFixed(2)}</td>
                     <td><small>${escapeHtml(item.location_name || '—')}</small></td>
                     <td><span class="status-tag ${statusClass}">${escapeHtml(item.status)}</span></td>
                     <td>
@@ -481,6 +496,8 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('inv-item-form').reset();
             document.getElementById('inv-item-edit-id').value = '';
             document.getElementById('inv-item-modal-title').textContent = 'Add Stock Product';
+            const openStockEl = document.getElementById('inv-item-opening-stock');
+            if (openStockEl) openStockEl.disabled = false;
             openInvModal('inv-item-modal');
         });
     }
@@ -542,12 +559,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     res = await window.api.createInvItem(data);
                 }
 
-                if (res.success) {
+                if (res && res.success) {
                     toast(editId ? "Product updated successfully!" : "Product created successfully!");
                     closeInvModal('inv-item-modal');
-                    loadItemsData();
+                    await loadItemsData();
                 } else {
-                    toast(res.error || 'Failed to save product', 'error');
+                    toast(res ? res.error : 'Failed to save product', 'error');
                 }
             } catch (e) {
                 toast(e.message, 'error');
@@ -574,15 +591,21 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('inv-item-supplier').value = item.supplier_id || '';
             document.getElementById('inv-item-location').value = item.storage_location_id || '';
             document.getElementById('inv-item-unit').value = item.unit;
-            document.getElementById('inv-item-purchase-price').value = item.purchase_price;
-            document.getElementById('inv-item-selling-price').value = item.selling_price || '';
-            document.getElementById('inv-item-opening-stock').value = item.opening_stock;
-            document.getElementById('inv-item-minimum-stock').value = item.minimum_stock;
-            document.getElementById('inv-item-reorder-level').value = item.reorder_level;
+            document.getElementById('inv-item-purchase-price').value = item.purchase_price !== undefined ? item.purchase_price : '';
+            document.getElementById('inv-item-selling-price').value = item.selling_price !== undefined ? item.selling_price : '';
+            
+            const openStockEl = document.getElementById('inv-item-opening-stock');
+            if (openStockEl) {
+                openStockEl.value = item.opening_stock !== undefined ? item.opening_stock : '';
+                openStockEl.disabled = true;
+            }
+            
+            document.getElementById('inv-item-minimum-stock').value = item.minimum_stock !== undefined ? item.minimum_stock : '';
+            document.getElementById('inv-item-reorder-level').value = item.reorder_level !== undefined ? item.reorder_level : '';
             
             document.getElementById('inv-item-size').value = item.size || '';
             document.getElementById('inv-item-color-type').value = item.color_type || '';
-            document.getElementById('inv-item-gsm').value = item.gsm || '';
+            document.getElementById('inv-item-gsm').value = item.gsm !== null && item.gsm !== undefined ? item.gsm : '';
             document.getElementById('inv-item-finish').value = item.finish || '';
             document.getElementById('inv-item-sheets-per-ream').value = item.sheets_per_ream || 500;
             document.getElementById('inv-item-notes').value = item.notes || '';
@@ -597,11 +620,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!confirm("Are you sure you want to delete this product? Inactive items will be archived rather than fully deleted to keep histories intact.")) return;
         try {
             const res = await window.api.deleteInvItem(id);
-            if (res.success) {
+            if (res && res.success) {
                 toast(res.message || "Product deleted successfully!");
-                loadItemsData();
+                await loadItemsData();
             } else {
-                toast(res.error, 'error');
+                toast(res ? res.error : "Failed to delete product", 'error');
             }
         } catch (e) {
             toast(e.message, 'error');
@@ -679,6 +702,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 description: document.getElementById('inv-cat-desc').value.trim()
             };
 
+            btnSaveInvCat.disabled = true;
+            const origText = btnSaveInvCat.innerHTML;
+            btnSaveInvCat.innerHTML = 'Saving...';
+
             try {
                 let res;
                 if (editId) {
@@ -687,18 +714,21 @@ document.addEventListener('DOMContentLoaded', () => {
                     res = await window.api.createInvCategory(data);
                 }
 
-                if (res.success) {
+                if (res && res.success) {
                     toast(editId ? "Category updated!" : "Category created!");
                     invCatForm.reset();
                     document.getElementById('inv-cat-edit-id').value = '';
                     catFormTitle.textContent = 'Create New Category';
                     if (btnCancelCatEdit) btnCancelCatEdit.style.display = 'none';
-                    loadCategoriesData();
+                    await loadCategoriesData();
                 } else {
-                    toast(res.error, 'error');
+                    toast(res ? res.error : 'Failed to save category', 'error');
                 }
             } catch (e) {
                 toast(e.message, 'error');
+            } finally {
+                btnSaveInvCat.disabled = false;
+                btnSaveInvCat.innerHTML = origText;
             }
         });
     }
@@ -790,6 +820,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 outstanding_balance: parseFloat(document.getElementById('inv-supplier-balance').value) || 0
             };
 
+            btnSaveInvSupplier.disabled = true;
+            const origText = btnSaveInvSupplier.innerHTML;
+            btnSaveInvSupplier.innerHTML = 'Saving...';
+
             try {
                 let res;
                 if (editId) {
@@ -798,15 +832,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     res = await window.api.createInvSupplier(data);
                 }
 
-                if (res.success) {
+                if (res && res.success) {
                     toast(editId ? "Supplier updated!" : "Supplier created!");
                     closeInvModal('inv-supplier-modal');
-                    loadSuppliersData();
+                    await loadSuppliersData();
                 } else {
-                    toast(res.error, 'error');
+                    toast(res ? res.error : 'Failed to save supplier', 'error');
                 }
             } catch (e) {
                 toast(e.message, 'error');
+            } finally {
+                btnSaveInvSupplier.disabled = false;
+                btnSaveInvSupplier.innerHTML = origText;
             }
         });
     }
@@ -1104,17 +1141,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 items
             };
 
+            btnSaveInvPo.disabled = true;
+            const origText = btnSaveInvPo.innerHTML;
+            btnSaveInvPo.innerHTML = 'Saving...';
+
             try {
                 const res = await window.api.createInvPurchaseOrder(poData);
-                if (res.success) {
+                if (res && res.success) {
                     toast(`Purchase order "${res.po_number || res.poNumber}" raised successfully!`);
                     closeInvModal('inv-po-modal');
-                    loadPOData();
+                    await loadPOData();
                 } else {
-                    toast(res.error, 'error');
+                    toast(res ? res.error : 'Failed to create purchase order', 'error');
                 }
             } catch (e) {
                 toast(e.message, 'error');
+            } finally {
+                btnSaveInvPo.disabled = false;
+                btnSaveInvPo.innerHTML = origText;
             }
         });
     }
@@ -1453,18 +1497,29 @@ document.addEventListener('DOMContentLoaded', () => {
             operator: 'Admin'
         };
 
+        const receiveBtn = document.querySelector('#inv-po-details-modal button[onclick*="confirmPoReceipt"]');
+        if (receiveBtn) {
+            receiveBtn.disabled = true;
+            receiveBtn.innerHTML = 'Receiving...';
+        }
+
         try {
             const res = await window.api.receiveInvPurchaseOrder(poId, data);
-            if (res.success) {
+            if (res && res.success) {
                 toast(`Goods receipt #${res.receiptNumber || res.receipt_number} posted successfully! Status: ${res.poStatus}`);
                 closeInvModal('inv-po-details-modal');
-                loadPOData();
-                loadItemsData();
+                await loadPOData();
+                await loadItemsData();
             } else {
-                toast(res.error, 'error');
+                toast(res ? res.error : 'Failed to post goods receipt', 'error');
             }
         } catch (e) {
             toast(e.message, 'error');
+        } finally {
+            if (receiveBtn) {
+                receiveBtn.disabled = false;
+                receiveBtn.innerHTML = '📦 Post Goods Receipt';
+            }
         }
     };
 
@@ -1565,20 +1620,31 @@ document.addEventListener('DOMContentLoaded', () => {
                 operator: 'Admin'
             };
 
+            btnSaveInvAdjustment.disabled = true;
+            const origText = btnSaveInvAdjustment.innerHTML;
+            btnSaveInvAdjustment.innerHTML = 'Saving...';
+
             try {
                 const res = await window.api.adjustInvStock(data);
-                if (res.success) {
+                if (res && res.success) {
                     toast("Stock adjustment saved successfully!");
                     closeInvModal('inv-adjust-modal');
                     
-                    // Reload data
+                    // Reload reference data and all views
                     await loadReferenceData();
-                    loadTransactionsData();
+                    await loadTransactionsData();
+                    renderStockItemsTable();
+                    if (document.getElementById('inv-dashboard')?.classList.contains('active')) {
+                        loadDashboardData();
+                    }
                 } else {
-                    toast(res.error, 'error');
+                    toast(res ? res.error : 'Failed to adjust stock', 'error');
                 }
             } catch (e) {
                 toast(e.message, 'error');
+            } finally {
+                btnSaveInvAdjustment.disabled = false;
+                btnSaveInvAdjustment.innerHTML = origText;
             }
         });
     }
@@ -1750,16 +1816,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 low_stock_threshold_percent: parseFloat(invSettingThreshold.value) || 15
             };
 
+            btnSaveInvSettings.disabled = true;
+            const origText = btnSaveInvSettings.innerHTML;
+            btnSaveInvSettings.innerHTML = 'Saving...';
+
             try {
                 const res = await window.api.updateInvSettings(data);
-                if (res.success) {
+                if (res && res.success) {
                     toast("Inventory settings saved!");
-                    loadSettingsData();
+                    await loadSettingsData();
                 } else {
-                    toast(res.error, 'error');
+                    toast(res ? res.error : 'Failed to save settings', 'error');
                 }
             } catch (e) {
                 toast(e.message, 'error');
+            } finally {
+                btnSaveInvSettings.disabled = false;
+                btnSaveInvSettings.innerHTML = origText;
             }
         });
     }
