@@ -569,6 +569,42 @@ h1 {
 .oh-controls {
     display: flex;
     gap: 8px;
+    align-items: center;
+}
+.oh-search-wrap {
+    display: flex;
+    align-items: center;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 4px 10px;
+    gap: 8px;
+    width: 280px;
+    transition: border-color 0.2s;
+}
+.oh-search-wrap:focus-within {
+    border-color: var(--accent-color, #6366f1);
+}
+.oh-search-icon {
+    font-size: 0.9rem;
+    opacity: 0.6;
+    flex-shrink: 0;
+}
+.oh-search-input {
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 0.88rem;
+    outline: none;
+    width: 100%;
+}
+.oh-search-clear {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.9rem;
+    padding: 0 4px;
 }
 .oh-filter-select {
     padding: 8px 14px;
@@ -1968,6 +2004,38 @@ h1 {
 .comp-btn:hover .comp-btn-arrow {
     transform: translateX(4px);
     opacity: 1;
+}
+
+#workspace .comp-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
+@media (max-width: 1280px) {
+    #workspace .ws-step1-layout {
+        grid-template-columns: 1fr 340px;
+    }
+    #workspace .ws-billing-body {
+        grid-template-columns: 1fr 340px;
+    }
+}
+
+@media (max-width: 1024px) {
+    #workspace .ws-step1-layout {
+        grid-template-columns: 1fr 320px;
+    }
+    #workspace .ws-billing-body {
+        grid-template-columns: 1fr 320px;
+    }
+    #workspace .ws-form-row {
+        gap: 10px;
+    }
+    #workspace .ws-step1-left,
+    #workspace .ws-step1-right {
+        padding: 14px;
+    }
 }
 
 /* Progress / Alert Banner */

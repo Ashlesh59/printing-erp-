@@ -1139,9 +1139,19 @@
                                         <span id="comp-banner-text">Processing...</span>
                                     </div>
 
-                                    <!-- THREE PRIMARY COMMERCIAL ACTIONS -->
+                                    <!-- FOUR PRIMARY COMMERCIAL ACTIONS -->
                                     <div class="completion-actions-group">
-                                        <!-- ACTION 1: SAVE & PRINT (PRIMARY RED BUTTON) -->
+                                        <!-- ACTION 1: SAVE ORDER (NO PRINT) -->
+                                        <button id="btn-action-save-only" class="comp-btn comp-btn-secondary">
+                                            <div class="comp-btn-icon">💾</div>
+                                            <div class="comp-btn-content">
+                                                <div class="comp-btn-title">SAVE ORDER</div>
+                                                <div class="comp-btn-desc">Saves DB record, creates GST invoice &amp; adds to Production Queue</div>
+                                            </div>
+                                            <div class="comp-btn-arrow">➔</div>
+                                        </button>
+
+                                        <!-- ACTION 2: SAVE & PRINT (PRIMARY RED BUTTON) -->
                                         <button id="btn-action-save-print" class="comp-btn comp-btn-save-print">
                                             <div class="comp-btn-icon">🖨️</div>
                                             <div class="comp-btn-content">
@@ -1151,7 +1161,7 @@
                                             <div class="comp-btn-arrow">➔</div>
                                         </button>
 
-                                        <!-- ACTION 2: PRINT ONLY (SECONDARY BUTTON) -->
+                                        <!-- ACTION 3: PRINT ONLY (SECONDARY BUTTON) -->
                                         <button id="btn-action-print-only" class="comp-btn comp-btn-secondary">
                                             <div class="comp-btn-icon">⚡</div>
                                             <div class="comp-btn-content">
@@ -1161,8 +1171,8 @@
                                             <div class="comp-btn-arrow">➔</div>
                                         </button>
 
-                                        <!-- ACTION 3: SCHEDULE PRINT (SECONDARY BUTTON) -->
-                                        <button id="btn-action-schedule" class="comp-btn comp-btn-secondary" onclick="console.log('Schedule button clicked!'); try { if(window.openScheduleProductionModal) { console.log('Calling global modal opener'); window.openScheduleProductionModal(); } else { console.log('Global opener not found, opening manually'); const m = document.getElementById('schedule-production-modal'); if(m) m.style.setProperty('display', 'flex', 'important'); } } catch(e) { console.error('Error in inline onclick:', e); }">
+                                        <!-- ACTION 4: SCHEDULE PRINT (SECONDARY BUTTON) -->
+                                        <button id="btn-action-schedule" class="comp-btn comp-btn-secondary">
                                             <div class="comp-btn-icon">📅</div>
                                             <div class="comp-btn-content">
                                                 <div class="comp-btn-title">SCHEDULE PRINT</div>
@@ -1190,10 +1200,17 @@
                             <span id="oh-count-badge" class="oh-count-badge">— orders</span>
                         </div>
                         <div class="oh-controls">
+                            <div class="oh-search-wrap">
+                                <span class="oh-search-icon">🔍</span>
+                                <input type="text" id="history-search-input" class="oh-search-input" placeholder="Search customer, phone, order #, file..." autocomplete="off">
+                                <button id="history-search-clear" class="oh-search-clear" title="Clear search" style="display: none;">✕</button>
+                            </div>
                             <select id="history-filter" class="oh-filter-select">
                                 <option value="All">All Orders</option>
-                                <option value="Pending">Pending</option>
+                                <option value="Confirmed">Confirmed</option>
                                 <option value="Completed">Completed</option>
+                                <option value="Pending">Pending</option>
+                                <option value="Scheduled">Scheduled</option>
                                 <option value="Processing">Processing</option>
                                 <option value="Cancelled">Cancelled</option>
                             </select>
@@ -4010,6 +4027,25 @@
             <div class="cw-modal-footer">
                 <button id="cw-modal-cancel" class="cw-act-btn">Cancel</button>
                 <button id="cw-modal-save" class="cw-act-btn cw-act-accent">Save Customer</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reusable File Preview Modal for Incoming & Order Files -->
+    <div id="file-preview-modal" class="cw-modal-overlay" style="display: none; z-index: 99999;">
+        <div class="cw-modal-card" style="max-width: 820px; width: 90vw; max-height: 90vh; display: flex; flex-direction: column; padding: 20px;">
+            <div class="cw-modal-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 14px;">
+                <div>
+                    <div id="fpm-file-title" style="font-size: 1.15rem; font-weight: 700; color: var(--text-primary);">Document Preview</div>
+                    <div id="fpm-file-meta" style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 2px;">—</div>
+                </div>
+                <button id="fpm-modal-close" style="background: transparent; border: none; color: var(--text-secondary); font-size: 1.5rem; cursor: pointer; line-height: 1;">✕</button>
+            </div>
+            <div id="fpm-preview-content" style="flex: 1; overflow: auto; display: flex; justify-content: center; align-items: center; min-height: 380px; background: rgba(0,0,0,0.25); border-radius: 8px; padding: 12px;">
+                <!-- Rendered image or canvas/PDF embed -->
+            </div>
+            <div class="cw-modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-color);">
+                <button id="fpm-btn-close" class="action-btn" style="background: var(--card-bg); border: 1px solid var(--border-color); color: var(--text-primary); padding: 8px 18px;">Close Preview</button>
             </div>
         </div>
     </div>

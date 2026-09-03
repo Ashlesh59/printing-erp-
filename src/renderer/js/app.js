@@ -1556,71 +1556,164 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
-    // Global function to open pending order
-    window.openPendingOrder = (encodedOrder) => {
+    // Global function to preview a document/image file safely
+    window.previewFile = function(filePath, fileName = 'Document', fileExt = '') {
+        const modal = document.getElementById('file-preview-modal');
+        if (!modal) return;
+
+        const titleEl = document.getElementById('fpm-file-title');
+        const metaEl = document.getElementById('fpm-file-meta');
+        const contentEl = document.getElementById('fpm-preview-content');
+
+        if (titleEl) titleEl.textContent = fileName || 'File Preview';
+        if (metaEl) metaEl.textContent = filePath ? `Path: ${filePath}` : '—';
+        if (contentEl) contentEl.innerHTML = '';
+
+        if (!filePath) {
+            if (contentEl) contentEl.innerHTML = '<div style="color:#ef4444; font-weight:600; text-align:center; padding:20px;">⚠️ No file path available for this item.</div>';
+            modal.style.display = 'flex';
+            return;
+        }
+
+        const ext = (fileExt || (filePath.includes('.') ? filePath.substring(filePath.lastIndexOf('.')).toLowerCase() : '')).toLowerCase();
+        const encodedPath = encodeURI(filePath.replace(/\\/g, '/')).replace(/#/g, '%23');
+
+        if (['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'].includes(ext)) {
+            const img = document.createElement('img');
+            img.src = `app-file:///${encodedPath}`;
+            img.style.maxWidth = '100%';
+            img.style.maxHeight = '480px';
+            img.style.objectFit = 'contain';
+            img.style.borderRadius = '6px';
+            img.onerror = () => {
+                if (contentEl) contentEl.innerHTML = `<div style="color:#ef4444; font-weight:600; text-align:center; padding:20px;">⚠️ File missing or corrupt: ${fileName}<br><span style="font-size:0.8rem; color:var(--text-secondary);">${filePath}</span></div>`;
+            };
+            contentEl.appendChild(img);
+        } else if (ext === '.pdf') {
+            contentEl.innerHTML = `
+                <div style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center;">
+                    <embed src="app-file:///${encodedPath}" type="application/pdf" style="width:100%; height:460px; border:1px solid var(--border-color); border-radius:6px;" />
+                </div>
+            `;
+        } else {
+            contentEl.innerHTML = `
+                <div style="text-align:center; padding:24px;">
+                    <div style="font-size:3rem;">📄</div>
+                    <h3 style="margin:10px 0 6px 0; color:var(--text-primary);">${fileName}</h3>
+                    <p style="color:var(--text-secondary); font-size:0.85rem;">File format: ${ext.toUpperCase() || 'Unknown'} • Direct preview not available for this type.</p>
+                </div>
+            `;
+        }
+
+        modal.style.display = 'flex';
+    };
+
+    window.previewIncomingFile = function(encodedOrder) {
         try {
-            const order = JSON.parse(decodeURIComponent(encodedOrder));
+            const order = typeof encodedOrder === 'string' ? JSON.parse(decodeURIComponent(encodedOrder)) : encodedOrder;
+            window.previewFile(order.file_path, order.file_name || 'Incoming Document', '');
+        } catch(e) {
+            console.error("Preview failed:", e);
+            if (window.showToast) window.showToast('Could not preview file: ' + e.message, 'error');
+        }
+    };
+
+    // Close handlers for file preview modal
+    const fpmModal = document.getElementById('file-preview-modal');
+    const fpmClose = document.getElementById('fpm-modal-close');
+    const fpmBtnClose = document.getElementById('fpm-btn-close');
+    [fpmClose, fpmBtnClose].forEach(btn => {
+        btn?.addEventListener('click', () => {
+            if (fpmModal) fpmModal.style.display = 'none';
+        });
+    });
+
+    // Global function to open pending order in workspace
+    let isIncomingHandoffBusy = false;
+    window.openPendingOrder = (encodedOrder) => {
+        if (isIncomingHandoffBusy) return;
+        isIncomingHandoffBusy = true;
+
+        try {
+            const order = typeof encodedOrder === 'string' ? JSON.parse(decodeURIComponent(encodedOrder)) : encodedOrder;
             const wsBtn = document.querySelector('.nav-btn[data-target="workspace"]');
             if (wsBtn) wsBtn.click();
             
             setTimeout(() => {
-                setupName.value = order.customer_name || '';
-                setupPhone.value = order.customer_phone || '';
-                if (order.print_type) setupPrintType.value = order.print_type;
-                if (order.paper_size) setupPaperSize.value = order.paper_size;
-                
-                // Auto-select correct paper type card
-                const targetColor = (order.print_type || '').toLowerCase();
-                const targetSize = (order.paper_size || '').toUpperCase();
-                
-                const radios = document.querySelectorAll('.paper-type-radio');
-                let bestMatch = null;
-                let colorMatchOnly = null;
-                
-                for (const r of radios) {
-                    const rColor = (r.dataset.color || '').toLowerCase();
-                    const rSize = (r.dataset.size || '').toUpperCase();
+                try {
+                    if (typeof window.clearWorkspace === 'function') window.clearWorkspace();
+
+                    const setupName = document.getElementById('setup-name');
+                    const setupPhone = document.getElementById('setup-phone');
+                    const setupGstin = document.getElementById('setup-gstin');
+                    const setupCopies = document.getElementById('setup-copies');
+                    const setupPrintType = document.getElementById('setup-print-type');
+                    const setupPaperSize = document.getElementById('setup-paper-size');
+
+                    if (setupName) setupName.value = order.customer_name || '';
+                    if (setupPhone) setupPhone.value = order.customer_phone || '';
+                    if (setupGstin) setupGstin.value = order.customer_gstin || order.gstin || '';
+                    if (setupCopies) setupCopies.value = order.copies || 1;
+                    if (setupPrintType && order.print_type) setupPrintType.value = order.print_type;
+                    if (setupPaperSize && order.paper_size) setupPaperSize.value = order.paper_size;
                     
-                    if (rColor === targetColor && rSize === targetSize) {
-                        bestMatch = r;
-                        break;
+                    // Auto-select correct paper type card
+                    const targetColor = (order.print_type || '').toLowerCase();
+                    const targetSize = (order.paper_size || '').toUpperCase();
+                    
+                    const radios = document.querySelectorAll('.paper-type-radio');
+                    let bestMatch = null;
+                    let colorMatchOnly = null;
+                    
+                    for (const r of radios) {
+                        const rColor = (r.dataset.color || '').toLowerCase();
+                        const rSize = (r.dataset.size || '').toUpperCase();
+                        
+                        if (rColor === targetColor && rSize === targetSize) {
+                            bestMatch = r;
+                            break;
+                        }
+                        if (rColor === targetColor && !colorMatchOnly) {
+                            colorMatchOnly = r;
+                        }
                     }
-                    if (rColor === targetColor && !colorMatchOnly) {
-                        colorMatchOnly = r;
+                    
+                    const matchedRadio = bestMatch || colorMatchOnly;
+                    if (matchedRadio) {
+                        const card = matchedRadio.closest('label');
+                        if (card) card.click();
                     }
-                }
-                
-                const matchedRadio = bestMatch || colorMatchOnly;
-                if (matchedRadio) {
-                    const card = matchedRadio.closest('label');
-                    if (card) {
-                        card.click();
-                        console.log(`Auto-selected paper option: ${matchedRadio.dataset.name}`);
+                    
+                    // Add the file with full metadata
+                    if (order.file_path && typeof order.file_path === 'string') {
+                        const ext = order.file_path.includes('.') ? order.file_path.substring(order.file_path.lastIndexOf('.')).toLowerCase() : '.pdf';
+                        currentOrderFiles = [{
+                            name: order.file_name || 'Attached File',
+                            path: order.file_path,
+                            ext: ext,
+                            size: 0,
+                            addedAt: new Date().toISOString()
+                        }];
+                    } else {
+                        currentOrderFiles = [];
                     }
+                    
+                    if (typeof renderAttachedFiles === 'function') renderAttachedFiles();
+                    if (typeof window.updateWorkspace === 'function') window.updateWorkspace();
+                    
+                    if (typeof goToStep === 'function') goToStep(1);
+
+                    if (window.showToast) {
+                        window.showToast(`Incoming order from ${order.customer_name || 'Customer'} loaded into workspace`, 'info');
+                    }
+                } finally {
+                    isIncomingHandoffBusy = false;
                 }
-                
-                // Add the file
-                if (order.file_path && typeof order.file_path === 'string' && order.file_path.includes('.')) {
-                    const ext = order.file_path.substring(order.file_path.lastIndexOf('.')).toLowerCase();
-                    currentOrderFiles = [{
-                        name: order.file_name || 'Attached File',
-                        path: order.file_path,
-                        ext: ext,
-                        size: 0,
-                        addedAt: new Date().toISOString()
-                    }];
-                } else {
-                    currentOrderFiles = [];
-                }
-                renderAttachedFiles();
-                
-                if(window.updateWorkspace) window.updateWorkspace();
-                
-                // Auto advance to step 2
-                goToStep(2);
-            }, 100);
+            }, 80);
         } catch(e) {
+            isIncomingHandoffBusy = false;
             console.error("Failed to open pending order", e);
+            if (window.showToast) window.showToast('Failed to open incoming order: ' + e.message, 'error');
         }
     };
 
@@ -1631,35 +1724,40 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!tbody) return;
         
         const allOrders = await window.api.getRecentOrders();
-        const incomingOrders = allOrders.filter(o => o.status === 'Pending');
+        const incomingOrders = (allOrders || []).filter(o => o.status === 'Pending');
         
         tbody.innerHTML = '';
         
         if (incomingOrders.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" class="empty-state" style="text-align: center;">No incoming orders.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="empty-state" style="text-align: center; padding: 24px; color: var(--text-secondary);">No incoming orders.</td></tr>';
             return;
         }
 
         incomingOrders.forEach(o => {
-            const date = new Date(o.created_at).toLocaleString();
-            const details = `${o.print_type.toUpperCase()} • ${o.paper_size}`;
+            const date = o.created_at ? new Date(o.created_at).toLocaleString() : '—';
+            const details = `${o.pages || 1}pg × ${o.copies || 1} copies • ${(o.print_type || 'B&W').toUpperCase()} • ${o.paper_size || 'A4'}`;
             const encodedOrder = encodeURIComponent(JSON.stringify(o));
-            const primaryTitle = window.formatOrderPrimaryTitle ? window.formatOrderPrimaryTitle(o) : (o.customer_name || 'Customer Order');
+            const custName = o.customer_name && o.customer_name.trim() ? o.customer_name.trim() : 'Walk-in Customer';
+            const custPhone = o.customer_phone && o.customer_phone.trim() ? o.customer_phone.trim() : '—';
+            const rawFileName = o.file_name || 'Attached File';
             
             tbody.innerHTML += `
                 <tr>
-                    <td>${date}</td>
-                    <td><div style="font-weight: bold;">${o.customer_name}</div></td>
-                    <td>${o.customer_phone}</td>
+                    <td style="white-space: nowrap;">${date}</td>
                     <td>
-                        <div style="font-weight: 800; color: var(--text-primary);">${primaryTitle}</div>
-                        <div style="font-size: 0.8rem; color: var(--text-secondary);">📄 File: ${o.file_name} &bull; ${details}</div>
-                        ${o.notes ? `<div style="font-size: 0.82rem; margin-top: 6px; padding: 6px 10px; background: rgba(139, 92, 246, 0.08); border-left: 3px solid var(--accent-color); border-radius: 4px; color: var(--text-primary); line-height: 1.4;">💬 <strong>Note:</strong> ${o.notes}</div>` : ''}
+                        <div style="font-weight: 700; color: var(--text-primary); font-size: 0.95rem;">${custName}</div>
+                    </td>
+                    <td style="white-space: nowrap; color: var(--text-secondary);">${custPhone}</td>
+                    <td>
+                        <div style="font-weight: 600; color: var(--text-primary); font-size: 0.88rem;">${details}</div>
+                        <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 2px;" title="${rawFileName}">📄 File: ${rawFileName.length > 32 ? rawFileName.slice(0, 30) + '…' : rawFileName}</div>
+                        ${o.notes ? `<div style="font-size: 0.82rem; margin-top: 6px; padding: 5px 8px; background: rgba(139, 92, 246, 0.08); border-left: 3px solid var(--accent-color); border-radius: 4px; color: var(--text-primary); line-height: 1.4;">💬 <strong>Note:</strong> ${o.notes}</div>` : ''}
                     </td>
                     <td>
-                        <div style="display: flex; gap: 8px;">
-                            <button class="action-btn" style="background: var(--success-color); color: white; padding: 6px 12px; font-size: 0.85rem;" onclick="window.openPendingOrder('${encodedOrder}')">✓ Accept</button>
-                            <button class="action-btn" style="background: transparent; border: 1px solid #ef4444; color: #ef4444; padding: 6px 12px; font-size: 0.85rem;" onclick="window.declineOrder(${o.id})">✕ Decline</button>
+                        <div style="display: flex; gap: 6px; align-items: center;">
+                            <button class="action-btn" style="background: var(--card-bg); border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px 10px; font-size: 0.82rem;" onclick="window.previewIncomingFile('${encodedOrder}')" title="Preview document">👁️ Preview</button>
+                            <button class="action-btn" style="background: var(--success-color); color: white; border: none; padding: 6px 12px; font-size: 0.82rem; font-weight: 600;" onclick="window.openPendingOrder('${encodedOrder}')" title="Process in Create Order">✓ Accept</button>
+                            <button class="action-btn" style="background: transparent; border: 1px solid #ef4444; color: #ef4444; padding: 6px 10px; font-size: 0.82rem;" onclick="window.declineOrder(${o.id})" title="Decline order">✕ Decline</button>
                         </div>
                     </td>
                 </tr>
@@ -1680,19 +1778,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
+    let isDeclineBusy = false;
     window.declineOrder = async (id) => {
+        if (isDeclineBusy) return;
         if (!window.api || !window.api.updateOrderStatus) return;
-        if (confirm("Are you sure you want to decline and remove this order?")) {
-            const res = await window.api.updateOrderStatus(id, 'Declined');
-            if (res.success) {
-                if (window.showToast) window.showToast('Order declined', 'info');
-                loadIncomingOrdersPage();
-                // Update badge and dashboard stats
-                if (document.getElementById('dashboard').classList.contains('active') && typeof loadDashboard === 'function') {
-                    loadDashboard();
+        if (confirm("Are you sure you want to decline and remove this incoming order?")) {
+            isDeclineBusy = true;
+            try {
+                const res = await window.api.updateOrderStatus(id, 'Declined');
+                if (res.success) {
+                    if (window.showToast) window.showToast('Order declined', 'info');
+                    loadIncomingOrdersPage();
+                    if (document.getElementById('dashboard').classList.contains('active') && typeof loadDashboard === 'function') {
+                        loadDashboard();
+                    }
+                } else {
+                    if (window.showToast) window.showToast('Failed to decline order: ' + res.error, 'error');
                 }
-            } else {
-                if (window.showToast) window.showToast('Failed to decline order: ' + res.error, 'error');
+            } finally {
+                isDeclineBusy = false;
             }
         }
     };
@@ -1701,8 +1805,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     let ordersOffset = 0;
     const ordersLimit = 50;
     let currentHistoryFilter = 'All';
+    let currentHistorySearch = '';
+    let cachedHistoryOrders = [];
 
-    window.loadOrderHistory = async function loadOrderHistory(filter = 'All', append = false) {
+    window.loadOrderHistory = async function loadOrderHistory(filter = 'All', append = false, searchQuery = '') {
         if (!window.api || !window.api.getRecentOrders) return;
         
         const tbody = document.getElementById('history-table-body');
@@ -1711,55 +1817,76 @@ document.addEventListener('DOMContentLoaded', async () => {
         const emptyState = document.getElementById('oh-empty-state');
         const countBadge = document.getElementById('oh-count-badge');
         
-        if (!append || filter !== currentHistoryFilter) {
+        if (!append || filter !== currentHistoryFilter || searchQuery !== currentHistorySearch) {
             ordersOffset = 0;
             currentHistoryFilter = filter;
+            currentHistorySearch = searchQuery;
             tbody.innerHTML = '';
         }
 
-        let orders = await window.api.getRecentOrders(ordersLimit, ordersOffset);
+        let rawOrders = await window.api.getRecentOrders(ordersLimit, ordersOffset);
+        cachedHistoryOrders = rawOrders || [];
+        let orders = cachedHistoryOrders;
         
+        // Status filter
         if (filter !== 'All') {
-            orders = orders.filter(o => o.status === filter);
+            orders = orders.filter(o => (o.status || '').toLowerCase() === filter.toLowerCase());
+        }
+
+        // Lightweight real-time search filter
+        if (searchQuery && searchQuery.trim()) {
+            const q = searchQuery.trim().toLowerCase();
+            const cleanQ = q.replace(/^#/, '');
+            orders = orders.filter(o => {
+                const nameMatch = (o.customer_name || '').toLowerCase().includes(q);
+                const phoneMatch = (o.customer_phone || '').toLowerCase().includes(q);
+                const idMatch = String(o.id || '').includes(cleanQ);
+                const fileMatch = (o.file_name || '').toLowerCase().includes(q);
+                const notesMatch = (o.notes || '').toLowerCase().includes(q);
+                return nameMatch || phoneMatch || idMatch || fileMatch || notesMatch;
+            });
         }
 
         // Update count badge
         if (countBadge && !append) countBadge.textContent = `${orders.length} order${orders.length !== 1 ? 's' : ''}`;
 
         const statusConfig = {
-            'Completed':  { bg: 'rgba(16,185,129,0.12)',  color: '#10b981', label: 'Completed'  },
-            'Pending':    { bg: 'rgba(245,158,11,0.12)',  color: '#f59e0b', label: 'Pending'    },
-            'Processing': { bg: 'rgba(99,102,241,0.12)',  color: '#6366f1', label: 'Processing' },
-            'Cancelled':  { bg: 'rgba(239,68,68,0.12)',   color: '#ef4444', label: 'Cancelled'  },
-            'Printing':   { bg: 'rgba(6,182,212,0.12)',   color: '#06b6d4', label: 'Printing'   },
-            'Ready':      { bg: 'rgba(34,197,94,0.12)',   color: '#22c55e', label: 'Ready'      },
+            'Completed':     { bg: 'rgba(16,185,129,0.12)',  color: '#10b981', label: 'Completed'     },
+            'Confirmed':     { bg: 'rgba(16,185,129,0.12)',  color: '#10b981', label: 'Confirmed'     },
+            'Pending':       { bg: 'rgba(245,158,11,0.12)',  color: '#f59e0b', label: 'Pending'       },
+            'Processing':    { bg: 'rgba(99,102,241,0.12)',  color: '#6366f1', label: 'Processing'    },
+            'Scheduled':     { bg: 'rgba(139,92,246,0.12)',  color: '#8b5cf6', label: 'Scheduled'     },
+            'In Production': { bg: 'rgba(99,102,241,0.12)',  color: '#6366f1', label: 'In Production'},
+            'Cancelled':     { bg: 'rgba(239,68,68,0.12)',   color: '#ef4444', label: 'Cancelled'     },
+            'Printing':      { bg: 'rgba(6,182,212,0.12)',   color: '#06b6d4', label: 'Printing'      },
+            'Ready':         { bg: 'rgba(34,197,94,0.12)',   color: '#22c55e', label: 'Ready'         },
         };
 
         const rowsHtml = orders.map(o => {
-            const d = new Date(o.created_at);
+            const d = o.created_at ? new Date(o.created_at) : new Date();
             const dateStr = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
             const timeStr = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 
             // Customer avatar initials
-            const name = (o.customer_name || 'Unknown').trim();
-            const initials = name.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase();
+            const name = (o.customer_name && o.customer_name.trim()) ? o.customer_name.trim() : 'Walk-in Customer';
+            const initials = name.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || 'W';
             const avatarHue = (name.charCodeAt(0) * 37) % 360;
 
-            // Order Details — truncated filename with tooltip + specs
+            // Order Details — Customer-first hierarchy: specs + truncated file name with title tooltip
             const rawFile = o.file_name || '—';
             const truncFile = rawFile.length > 28 ? rawFile.slice(0, 26) + '…' : rawFile;
-            const printType = o.print_type || '';
+            const printType = (o.print_type || 'B&W').toUpperCase();
             const paper = o.paper_size || 'A4';
-            const details = `${o.pages || 0}pg × ${o.copies || 1} copies • ${printType}`;
+            const details = `${o.pages || 1}pg × ${o.copies || 1} • ${printType} • ${paper}`;
 
             // Amount block
-            const amount = typeof o.price === 'number' ? `₹${o.price.toFixed(2)}` : '₹0.00';
+            const amount = `₹${(parseFloat(o.price) || 0).toFixed(2)}`;
 
             // Status pill
             const sc = statusConfig[o.status] || statusConfig['Completed'];
             const statusHtml = `<span class="oh-status-pill" style="background:${sc.bg}; color:${sc.color};">${sc.label}</span>`;
 
-            // Action menu (order ID for handlers)
+            // Action menu
             const orderId = o.id;
 
             return `
@@ -1773,19 +1900,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                         <div class="oh-customer-wrap">
                             <div class="oh-avatar" style="background: hsl(${avatarHue},60%,50%);">${initials}</div>
                             <div class="oh-customer-info">
-                                <div class="oh-customer-name">${name}</div>
+                                <div class="oh-customer-name" style="font-weight: 700;">${name}</div>
                                 <div class="oh-customer-phone">${o.customer_phone || '—'}</div>
                             </div>
                         </div>
                     </td>
                     <td class="oh-td oh-td-details">
-                        <div class="oh-file-name" title="${rawFile}">${truncFile}</div>
-                        <div class="oh-file-meta">${details} • ${paper}</div>
+                        <div class="oh-file-meta" style="font-weight: 600; color: var(--text-primary); font-size: 0.88rem;">${details}</div>
+                        <div class="oh-file-name" title="${rawFile}" style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 2px;">📄 ${truncFile}</div>
                         ${o.notes ? `<div class="oh-file-note" title="${o.notes}">💬 ${o.notes.length > 32 ? o.notes.slice(0,30)+'…' : o.notes}</div>` : ''}
                     </td>
                     <td class="oh-td oh-td-amount">
                         <div class="oh-amount">${amount}</div>
-                        <div class="oh-amount-sub">${o.pages || 0} pages • ${printType || paper}</div>
+                        <div class="oh-amount-sub">${o.pages || 1} pages</div>
                     </td>
                     <td class="oh-td oh-td-status">
                         ${statusHtml}
@@ -1798,6 +1925,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 <div class="oh-dot-dropdown">
                                     <button class="oh-dot-item oh-action-complete" data-id="${orderId}">✓ Mark Complete</button>
                                     <button class="oh-dot-item oh-action-pending" data-id="${orderId}">⏳ Mark Pending</button>
+                                    <button class="oh-dot-item oh-action-reopen" data-id="${orderId}">🔁 Open in Workspace</button>
+                                    <button class="oh-dot-item oh-action-duplicate" data-id="${orderId}">📋 Duplicate Order</button>
+                                    <button class="oh-dot-item oh-action-reprint" data-id="${orderId}">🖨️ Reprint</button>
                                     <button class="oh-dot-item oh-action-cancel" data-id="${orderId}" style="color:#ef4444;">✕ Cancel Order</button>
                                 </div>
                             </div>
@@ -1839,7 +1969,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
         });
 
-        // Close dot menus on outside click — registered only once on the document
         if (!document.__ohDotMenuCloseRegistered) {
             document.__ohDotMenuCloseRegistered = true;
             document.addEventListener('click', () => {
@@ -1847,102 +1976,171 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
         }
 
-        // Action handlers
+        // Action handlers with scoped locks
+        let isHistoryActionBusy = false;
+
         tbody.querySelectorAll('.oh-action-complete').forEach(btn => {
             btn.addEventListener('click', async () => {
+                if (isHistoryActionBusy) return;
+                isHistoryActionBusy = true;
                 const id = btn.getAttribute('data-id');
-                if (window.api && window.api.updateOrderStatus) {
-                    await window.api.updateOrderStatus(id, 'Completed');
-                    loadOrderHistory(currentHistoryFilter);
-                    if (window.showToast) window.showToast('Order marked complete', 'success');
+                try {
+                    if (window.api && window.api.updateOrderStatus) {
+                        await window.api.updateOrderStatus(id, 'Completed');
+                        loadOrderHistory(currentHistoryFilter, false, currentHistorySearch);
+                        if (window.showToast) window.showToast('Order marked complete', 'success');
+                    }
+                } finally {
+                    isHistoryActionBusy = false;
                 }
             });
         });
+
         tbody.querySelectorAll('.oh-action-pending').forEach(btn => {
             btn.addEventListener('click', async () => {
+                if (isHistoryActionBusy) return;
+                isHistoryActionBusy = true;
                 const id = btn.getAttribute('data-id');
-                if (window.api && window.api.updateOrderStatus) {
-                    await window.api.updateOrderStatus(id, 'Pending');
-                    loadOrderHistory(currentHistoryFilter);
-                    if (window.showToast) window.showToast('Order marked pending', 'info');
+                try {
+                    if (window.api && window.api.updateOrderStatus) {
+                        await window.api.updateOrderStatus(id, 'Pending');
+                        loadOrderHistory(currentHistoryFilter, false, currentHistorySearch);
+                        if (window.showToast) window.showToast('Order marked pending', 'info');
+                    }
+                } finally {
+                    isHistoryActionBusy = false;
                 }
             });
         });
+
+        tbody.querySelectorAll('.oh-action-reopen').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const id = parseInt(btn.getAttribute('data-id'));
+                const targetOrder = cachedHistoryOrders.find(o => o.id === id);
+                if (targetOrder) {
+                    window.openPendingOrder(targetOrder);
+                } else {
+                    if (window.showToast) window.showToast(`Order #${id} not found in cache`, 'error');
+                }
+            });
+        });
+
+        tbody.querySelectorAll('.oh-action-duplicate').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                if (isHistoryActionBusy) return;
+                isHistoryActionBusy = true;
+                const id = parseInt(btn.getAttribute('data-id'));
+                try {
+                    if (window.api && window.api.duplicateOrderForCustomer) {
+                        const res = await window.api.duplicateOrderForCustomer(id);
+                        if (res && res.success) {
+                            if (window.showToast) window.showToast(`Order #${id} duplicated! (New Order #${res.orderId})`, 'success');
+                            loadOrderHistory(currentHistoryFilter, false, currentHistorySearch);
+                        } else {
+                            if (window.showToast) window.showToast(`Failed to duplicate order: ${res ? res.error : 'Unknown error'}`, 'error');
+                        }
+                    }
+                } finally {
+                    isHistoryActionBusy = false;
+                }
+            });
+        });
+
+        tbody.querySelectorAll('.oh-action-reprint').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                if (isHistoryActionBusy) return;
+                isHistoryActionBusy = true;
+                const id = parseInt(btn.getAttribute('data-id'));
+                const targetOrder = cachedHistoryOrders.find(o => o.id === id);
+                try {
+                    if (window.showToast) window.showToast(`Reprint request sent for Order #${id}...`, 'info');
+                    if (targetOrder && targetOrder.file_path && window.api && window.api.printFile) {
+                        const payload = [{
+                            path: targetOrder.file_path,
+                            ext: targetOrder.file_path.includes('.') ? targetOrder.file_path.substring(targetOrder.file_path.lastIndexOf('.')).toLowerCase() : '.pdf',
+                            rotate: 0,
+                            fit: 'contain'
+                        }];
+                        const res = await window.api.printFile(payload, {
+                            printerName: 'Default',
+                            printType: targetOrder.print_type || 'B&W',
+                            paperSize: targetOrder.paper_size || 'A4',
+                            copies: targetOrder.copies || 1
+                        });
+                        if (res && res.success) {
+                            if (window.showToast) window.showToast(`Order #${id} reprinted successfully!`, 'success');
+                        } else {
+                            if (window.showPrinterErrorModal) {
+                                window.showPrinterErrorModal(res ? res.error : 'Reprint failed', payload, { copies: 1 });
+                            }
+                        }
+                    } else if (window.api && window.api.reprintJob) {
+                        const res = await window.api.reprintJob(id);
+                        if (res && res.success) {
+                            if (window.showToast) window.showToast(`Order #${id} reprint queued!`, 'success');
+                        } else {
+                            if (window.showToast) window.showToast(`Reprint failed: ${res ? res.error : 'Unknown error'}`, 'error');
+                        }
+                    }
+                } catch(err) {
+                    if (window.showToast) window.showToast('Reprint error: ' + err.message, 'error');
+                } finally {
+                    isHistoryActionBusy = false;
+                }
+            });
+        });
+
         tbody.querySelectorAll('.oh-action-cancel').forEach(btn => {
             btn.addEventListener('click', async () => {
+                if (isHistoryActionBusy) return;
                 const id = btn.getAttribute('data-id');
-                if (window.api && window.api.updateOrderStatus) {
-                    await window.api.updateOrderStatus(id, 'Cancelled');
-                    loadOrderHistory(currentHistoryFilter);
-                    if (window.showToast) window.showToast('Order cancelled', 'warning');
+                if (confirm(`Are you sure you want to cancel Order #${id}?`)) {
+                    isHistoryActionBusy = true;
+                    try {
+                        if (window.api && window.api.updateOrderStatus) {
+                            await window.api.updateOrderStatus(id, 'Cancelled');
+                            loadOrderHistory(currentHistoryFilter, false, currentHistorySearch);
+                            if (window.showToast) window.showToast(`Order #${id} cancelled`, 'warning');
+                        }
+                    } finally {
+                        isHistoryActionBusy = false;
+                    }
                 }
             });
         });
     }
 
-    let customersOffset = 0;
-    const customersLimit = 50;
+    // Search Input Listener for Order History
+    const historySearchInput = document.getElementById('history-search-input');
+    const historySearchClear = document.getElementById('history-search-clear');
+    let searchDebounceTimer = null;
 
-    async function loadCustomers(append = false) {
-        if (!window.api || !window.api.getAllCustomers) return;
-        const tbody = document.getElementById('customers-table-body');
-        if (!tbody) return;
-        const loadMoreBtn = document.getElementById('btn-load-more-customers');
-
-        if (!append) {
-            customersOffset = 0;
-            tbody.innerHTML = '';
-        }
-
-        const customers = await window.api.getAllCustomers(customersLimit, customersOffset);
-        const rowsHtml = customers.map(c => `
-            <tr>
-                <td>${c.id}</td>
-                <td>${c.name}</td>
-                <td>${c.phone}</td>
-                <td>${c.total_orders}</td>
-                <td>₹${(c.total_revenue || 0).toFixed(2)}</td>
-            </tr>
-        `).join('');
-
-        if (append) {
-            tbody.insertAdjacentHTML('beforeend', rowsHtml);
-        } else {
-            tbody.innerHTML = rowsHtml;
-        }
-
-        customersOffset += customers.length;
-
-        if (customers.length === customersLimit) {
-            if (loadMoreBtn) loadMoreBtn.style.display = 'block';
-        } else {
-            if (loadMoreBtn) loadMoreBtn.style.display = 'none';
-        }
-    }
-
-    // [REMOVED] Duplicate navButtons loop (was firing load functions a second time alongside executeTabSwitch)
-
-    const btnLoadMoreCustomers = document.getElementById('btn-load-more-customers');
-    if (btnLoadMoreCustomers) {
-        btnLoadMoreCustomers.addEventListener('click', () => {
-            loadCustomers(true);
+    if (historySearchInput) {
+        historySearchInput.addEventListener('input', (e) => {
+            const val = e.target.value;
+            if (historySearchClear) {
+                historySearchClear.style.display = val.length > 0 ? 'inline-block' : 'none';
+            }
+            clearTimeout(searchDebounceTimer);
+            searchDebounceTimer = setTimeout(() => {
+                loadOrderHistory(currentHistoryFilter, false, val);
+            }, 120);
         });
     }
 
-    const btnLoadMoreOrders = document.getElementById('btn-load-more-orders');
-    if (btnLoadMoreOrders) {
-        btnLoadMoreOrders.addEventListener('click', () => {
-            loadOrderHistory(currentHistoryFilter, true);
+    if (historySearchClear) {
+        historySearchClear.addEventListener('click', () => {
+            if (historySearchInput) historySearchInput.value = '';
+            historySearchClear.style.display = 'none';
+            loadOrderHistory(currentHistoryFilter, false, '');
         });
     }
 
-    // [REMOVED] Blind startup calls — data is already loaded by executeTabSwitch during role activation
-    
-    // History Filter Logic
+    // History Filter Dropdown Listener
     const historyFilter = document.getElementById('history-filter');
     if (historyFilter) {
         historyFilter.addEventListener('change', (e) => {
-            loadOrderHistory(e.target.value);
+            loadOrderHistory(e.target.value, false, historySearchInput ? historySearchInput.value : '');
         });
     }
 
@@ -4597,44 +4795,47 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     class PricingEngine {
         static calculatePrice(productBaseRate, profileConfig, specs, pages, copies) {
-            const rules = profileConfig.pricing || {};
+            const rules = (profileConfig && profileConfig.pricing) ? profileConfig.pricing : {};
             const model = rules.pricing_model || 'unit';
             const surcharges = rules.surcharges || {};
 
-            let baseRate = parseFloat(productBaseRate) || 0;
+            let baseRate = Math.max(0, parseFloat(productBaseRate) || 0);
+            let validCopies = Math.max(1, parseInt(copies) || 1);
+            let validPages = Math.max(1, parseInt(pages) || 1);
             let itemBasePrice = 0;
+            const validSpecs = specs || {};
 
             if (model === 'area') {
-                const width = parseFloat(specs['Width']) || 0;
-                const height = parseFloat(specs['Height']) || 0;
-                const materialVal = specs['Material'];
+                const width = Math.max(0, parseFloat(validSpecs['Width']) || 0);
+                const height = Math.max(0, parseFloat(validSpecs['Height']) || 0);
+                const materialVal = validSpecs['Material'];
                 if (materialVal && surcharges['Material'] && surcharges['Material'][materialVal]) {
-                    baseRate += parseFloat(surcharges['Material'][materialVal]);
+                    baseRate += (parseFloat(surcharges['Material'][materialVal]) || 0);
                 }
                 itemBasePrice = width * height * baseRate;
             } else if (model === 'page') {
-                const pageCount = parseInt(specs['Page Count']) || parseInt(pages) || 1;
+                const pageCount = parseInt(validSpecs['Page Count']) || validPages;
                 let coverPrice = 0;
-                const coverVal = specs['Cover Paper'];
+                const coverVal = validSpecs['Cover Paper'];
                 if (coverVal && surcharges['Cover Paper'] && surcharges['Cover Paper'][coverVal]) {
-                    coverPrice += parseFloat(surcharges['Cover Paper'][coverVal]);
+                    coverPrice += (parseFloat(surcharges['Cover Paper'][coverVal]) || 0);
                 }
-                itemBasePrice = coverPrice + (pageCount * baseRate);
+                itemBasePrice = coverPrice + (Math.max(1, pageCount) * baseRate);
             } else {
                 itemBasePrice = baseRate;
             }
 
             let totalSurcharges = 0;
-            for (const [key, val] of Object.entries(specs)) {
+            for (const [key, val] of Object.entries(validSpecs)) {
                 if (surcharges[key] && surcharges[key][val]) {
                     if (model === 'area' && key === 'Material') continue;
                     if (model === 'page' && key === 'Cover Paper') continue;
-                    totalSurcharges += parseFloat(surcharges[key][val]);
+                    totalSurcharges += (parseFloat(surcharges[key][val]) || 0);
                 }
             }
 
-            let finalUnitPrice = itemBasePrice + totalSurcharges;
-            return finalUnitPrice * copies;
+            let finalUnitPrice = Math.max(0, itemBasePrice + totalSurcharges);
+            return Math.max(0, finalUnitPrice * validCopies);
         }
     }
 
@@ -4662,16 +4863,32 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (!window.currentOrderConfigGlobal) {
                 window.currentOrderConfigGlobal = {};
             }
-            if (!window.currentOrderConfigGlobal.specifications) {
-                window.currentOrderConfigGlobal.specifications = {};
-            }
+            
+            // Profile-aware specification mapping: retain valid shared fields, purge stale fields from other products
+            const oldSpecs = window.currentOrderConfigGlobal.specifications || {};
+            const newSpecs = {};
 
             const fields = config.fields || [];
             fields.forEach(f => {
-                if (window.currentOrderConfigGlobal.specifications[f.key] === undefined) {
-                    window.currentOrderConfigGlobal.specifications[f.key] = f.default;
+                if (oldSpecs[f.key] !== undefined) {
+                    if (f.type === 'select' && Array.isArray(f.options)) {
+                        if (f.options.includes(oldSpecs[f.key])) {
+                            newSpecs[f.key] = oldSpecs[f.key];
+                        } else {
+                            newSpecs[f.key] = f.default;
+                        }
+                    } else if (f.type === 'number') {
+                        const numVal = parseFloat(oldSpecs[f.key]);
+                        newSpecs[f.key] = (!isNaN(numVal) && numVal > 0) ? oldSpecs[f.key] : f.default;
+                    } else {
+                        newSpecs[f.key] = oldSpecs[f.key];
+                    }
+                } else {
+                    newSpecs[f.key] = f.default;
                 }
             });
+
+            window.currentOrderConfigGlobal.specifications = newSpecs;
 
             if (window.currentOrderConfigGlobal.copies === undefined) {
                 window.currentOrderConfigGlobal.copies = 1;

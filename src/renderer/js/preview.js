@@ -538,9 +538,27 @@ document.addEventListener('DOMContentLoaded', () => {
         return result;
     }
 
+    let isWorkspaceActionBusy = false;
+    let savedOrderIdForRetry = null;
+
+    function setActionsDisabled(disabled) {
+        const btnSave = document.getElementById('btn-action-save-only');
+        const btnSavePrint = document.getElementById('btn-action-save-print');
+        const btnPrintOnly = document.getElementById('btn-action-print-only');
+        const btnSchedule = document.getElementById('btn-action-schedule');
+        const schedConfirm = document.getElementById('sched-btn-confirm');
+
+        [btnSave, btnSavePrint, btnPrintOnly, btnSchedule, schedConfirm].forEach(btn => {
+            if (btn) btn.disabled = disabled;
+        });
+    }
+
     window.clearWorkspace = function() {
+        savedOrderIdForRetry = null;
         if (typeof window.currentOrderFiles !== 'undefined') window.currentOrderFiles = [];
-        if (typeof window.fileSettings !== 'undefined') window.fileSettings = {};
+        if (typeof currentOrderFiles !== 'undefined') currentOrderFiles = [];
+        if (typeof fileSettings !== 'undefined') fileSettings = [];
+        if (typeof currentFiles !== 'undefined') currentFiles = [];
         window.currentDocStudioOutput = null;
         window.currentJobToSchedule = null;
 
@@ -549,11 +567,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const setupPhone = document.getElementById('setup-phone');
         const setupName = document.getElementById('setup-name');
+        const setupGstin = document.getElementById('setup-gstin');
+        const setupCopies = document.getElementById('setup-copies');
         if (setupPhone) setupPhone.value = '';
         if (setupName) setupName.value = '';
+        if (setupGstin) setupGstin.value = '';
+        if (setupCopies) setupCopies.value = '1';
+
+        const btnViewHistory = document.getElementById('btn-view-history');
+        if (btnViewHistory) btnViewHistory.style.display = 'none';
+
+        const bn = document.getElementById('billing-customer-name');
+        const bp = document.getElementById('billing-customer-phone');
+        if (bn) bn.textContent = '—';
+        if (bp) bp.textContent = '—';
+
+        try {
+            localStorage.removeItem('psm_draft_order_backup');
+        } catch(e) {}
+
+        const banner = document.getElementById('comp-status-banner');
+        if (banner) banner.style.display = 'none';
+
+        if (typeof renderAttachedFiles === 'function') renderAttachedFiles();
+        if (typeof window.updateWorkspace === 'function') window.updateWorkspace();
+        if (typeof goToStep === 'function') goToStep(1);
     };
 
     function cleanupAfterSuccess(targetView = 'dashboard') {
+        savedOrderIdForRetry = null;
         if (currentOrderConfig && currentOrderConfig.phone) {
             try {
                 localStorage.setItem(`prefs_${currentOrderConfig.phone}`, JSON.stringify({
@@ -577,246 +619,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (targetBtn) targetBtn.click();
     }
 
-    window.showPrinterErrorModal = async function(errorMsg, payload, options) {
-        const modal = document.getElementById('printer-error-modal');
-        if (!modal) return;
-
-        const msgEl = document.getElementById('pe-modal-message');
-        if (msgEl) msgEl.textContent = errorMsg || 'Printer hardware is offline or failed to respond.';
-
-        const selectEl = document.getElementById('pe-select-printer');
-        if (selectEl && window.api && window.api.getPrinters) {
-            try {
-                const printers = await window.api.getPrinters();
-                let html = '';
-                (printers || []).forEach(p => {
-                    const pName = p.name || p.display_name;
-                    html += `<option value="${pName}">${pName} (${p.status || 'Ready'})</option>`;
-                });
-                selectEl.innerHTML = html || '<option value="Default">Default Printer</option>';
-            } catch(e) {}
-        }
-
-        const btnRetry = document.getElementById('pe-btn-retry');
-        const btnSwitch = document.getElementById('pe-btn-switch');
-        const btnSched = document.getElementById('pe-btn-schedule');
-        const btnCancel = document.getElementById('pe-btn-cancel');
-
-        if (btnRetry) {
-            btnRetry.onclick = async () => {
-                modal.style.display = 'none';
-                try {
-                    const res = await window.api.printFile(payload, options);
-                    if (res && res.success) {
-                        if (window.showToast) window.showToast("Print job completed on retry!", 'success');
-                    } else {
-                        window.showPrinterErrorModal(res ? res.error : 'Retry failed', payload, options);
-                    }
-                } catch(err) {
-                    window.showPrinterErrorModal(err.message, payload, options);
-                }
-            };
-        }
-
-        if (btnSwitch) {
-            btnSwitch.onclick = async () => {
-                const newPrinter = selectEl ? selectEl.value : 'Default';
-                modal.style.display = 'none';
-                const newOpts = { ...options, printerName: newPrinter };
-                try {
-                    const res = await window.api.printFile(payload, newOpts);
-                    if (res && res.success) {
-                        if (window.showToast) window.showToast(`Print job sent to ${newPrinter}!`, 'success');
-                    } else {
-                        window.showPrinterErrorModal(res ? res.error : 'Print failed on switch', payload, newOpts);
-                    }
-                } catch(err) {
-                    window.showPrinterErrorModal(err.message, payload, newOpts);
-                }
-            };
-        }
-
-        if (btnSched) {
-            btnSched.onclick = () => {
-                modal.style.display = 'none';
-                if (typeof window.openScheduleProductionModal === 'function') {
-                    window.openScheduleProductionModal();
-                }
-            };
-        }
-
-        if (btnCancel) {
-            btnCancel.onclick = () => {
-                modal.style.display = 'none';
-                if (window.showToast) window.showToast("Print job cancelled safely.", 'info');
-            };
-        }
-
-        modal.style.display = 'flex';
-    };
-
-    function triggerPostBillingActionModal() {
-        const modal = document.getElementById('post-billing-action-modal');
-        if (!modal) return;
-        modal.style.display = 'flex';
-    }
-
-    window.triggerPostBillingActionModal = triggerPostBillingActionModal;
-
-    // =========================================================================
-    // ORDER COMPLETION PANEL — VALIDATION & COMMERCIAL ACTIONS
-    // =========================================================================
-
-    function updateBillingValidationChecklist() {
-        const valBox = document.getElementById('comp-val-box');
-        if (!valBox) return;
-
-        const configObj = (typeof currentOrderConfig !== 'undefined' && currentOrderConfig) ? currentOrderConfig : (window.currentOrderConfig || window.currentOrderConfigGlobal || null);
-        const filesList = (typeof currentFiles !== 'undefined' && currentFiles && currentFiles.length > 0) 
-            ? currentFiles 
-            : ((typeof currentOrderFiles !== 'undefined' && currentOrderFiles && currentOrderFiles.length > 0) 
-                ? currentOrderFiles 
-                : (window.currentOrderFiles || window.selectedFiles || (window.currentDocStudioOutput ? [window.currentDocStudioOutput] : [])));
-
-        const custName = configObj ? (configObj.name || configObj.phone) : null;
-        const fileCount = filesList ? filesList.length : 0;
-        const paperSize = configObj ? (configObj.paperSize || (configObj.paper ? configObj.paper.name : null)) : null;
-        const calcPrice = configObj ? (configObj.calculatedPrice || 0) : 0;
-        const copies = configObj ? (configObj.copies || 1) : 1;
-
-        // Customer
-        const custItem = document.getElementById('val-item-customer');
-        const custIcon = document.getElementById('val-icon-customer');
-        const custText = document.getElementById('val-text-customer');
-        if (custItem && custIcon && custText) {
-            if (custName) {
-                custItem.className = 'val-item valid';
-                custIcon.textContent = '✓';
-                custText.textContent = custName;
-            } else {
-                custItem.className = 'val-item invalid';
-                custIcon.textContent = '❌';
-                custText.textContent = 'None Selected';
-            }
-        }
-
-        // Files
-        const filesItem = document.getElementById('val-item-files');
-        const filesIcon = document.getElementById('val-icon-files');
-        const filesText = document.getElementById('val-text-files');
-        if (filesItem && filesIcon && filesText) {
-            if (fileCount > 0) {
-                filesItem.className = 'val-item valid';
-                filesIcon.textContent = '✓';
-                filesText.textContent = fileCount + ' file(s)';
-            } else {
-                filesItem.className = 'val-item invalid';
-                filesIcon.textContent = '❌';
-                filesText.textContent = '0 Files Attached';
-            }
-        }
-
-        // Config
-        const cfgItem = document.getElementById('val-item-config');
-        const cfgIcon = document.getElementById('val-icon-config');
-        const cfgText = document.getElementById('val-text-config');
-        if (cfgItem && cfgIcon && cfgText) {
-            if (paperSize && copies > 0) {
-                cfgItem.className = 'val-item valid';
-                cfgIcon.textContent = '✓';
-                cfgText.textContent = `${paperSize} (x${copies})`;
-            } else {
-                cfgItem.className = 'val-item invalid';
-                cfgIcon.textContent = '❌';
-                cfgText.textContent = 'Missing Config';
-            }
-        }
-
-        // Printer
-        const prnItem = document.getElementById('val-item-printer');
-        const prnIcon = document.getElementById('val-icon-printer');
-        const prnText = document.getElementById('val-text-printer');
-        if (prnItem && prnIcon && prnText) {
-            const pName = (configObj && configObj.default_printer) ? configObj.default_printer : 'Default Printer';
-            prnItem.className = 'val-item valid';
-            prnIcon.textContent = '✓';
-            prnText.textContent = pName;
-        }
-
-        // Pricing
-        const prcItem = document.getElementById('val-item-pricing');
-        const prcIcon = document.getElementById('val-icon-pricing');
-        const prcText = document.getElementById('val-text-pricing');
-        if (prcItem && prcIcon && prcText) {
-            if (calcPrice > 0) {
-                prcItem.className = 'val-item valid';
-                prcIcon.textContent = '✓';
-                prcText.textContent = '₹' + calcPrice.toFixed(2);
-            } else {
-                prcItem.className = 'val-item invalid';
-                prcIcon.textContent = '❌';
-                prcText.textContent = '₹0.00';
-            }
-        }
-    }
-
-    window.updateBillingValidationChecklist = updateBillingValidationChecklist;
-    window.validateOrderBeforeAction = validateOrderBeforeAction;
-
-    function validateOrderBeforeAction() {
-        updateBillingValidationChecklist();
-
-        const configObj = getActiveConfig();
-        const filesList = getActiveFilesList();
-
-        const banner = document.getElementById('comp-status-banner');
-        const bannerText = document.getElementById('comp-banner-text');
-
-        if (!configObj || (!configObj.paperSize && !configObj.paper)) {
-            if (banner && bannerText) {
-                banner.style.display = 'flex';
-                banner.className = 'comp-status-banner error';
-                bannerText.textContent = '❌ Cannot proceed: No paper size selected.';
-            }
-            if (window.showToast) window.showToast('Please select a valid paper size.', 'error');
-            return false;
-        }
-
-        if (!filesList || filesList.length === 0) {
-            if (banner && bannerText) {
-                banner.style.display = 'flex';
-                banner.className = 'comp-status-banner error';
-                bannerText.textContent = '❌ Cannot proceed: No files attached to order.';
-            }
-            if (window.showToast) window.showToast('Please attach at least one print file.', 'error');
-            return false;
-        }
-
-        if ((configObj.copies || 0) <= 0) {
-            if (banner && bannerText) {
-                banner.style.display = 'flex';
-                banner.className = 'comp-status-banner error';
-                bannerText.textContent = '❌ Cannot proceed: Copies count must be > 0.';
-            }
-            if (window.showToast) window.showToast('Copies count must be at least 1.', 'error');
-            return false;
-        }
-
-        return true;
-    }
-
-    // -------------------------------------------------------------------------
-    // ACTION 1: SAVE & PRINT (Primary Red Button)
-    // -------------------------------------------------------------------------
-    if (btnActionSavePrint) {
-        btnActionSavePrint.addEventListener('click', async () => {
+    const btnActionSaveOnly = document.getElementById('btn-action-save-only');
+    if (btnActionSaveOnly) {
+        btnActionSaveOnly.addEventListener('click', async () => {
+            if (isWorkspaceActionBusy) return;
             if (!validateOrderBeforeAction()) return;
+
+            isWorkspaceActionBusy = true;
+            setActionsDisabled(true);
 
             const banner = document.getElementById('comp-status-banner');
             const spinner = document.getElementById('comp-banner-spinner');
             const bannerText = document.getElementById('comp-banner-text');
 
-            btnActionSavePrint.disabled = true;
             if (banner && bannerText) {
                 banner.style.display = 'flex';
                 banner.className = 'comp-status-banner';
@@ -825,9 +640,69 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             try {
-                const res = await executeSave('SAVE_AND_PRINT');
+                const res = await executeSave('SAVE');
 
                 if (res && res.success) {
+                    if (banner && bannerText) {
+                        banner.className = 'comp-status-banner success';
+                        if (spinner) spinner.style.display = 'none';
+                        bannerText.textContent = `✅ Order #${res.orderId || ''} Saved & Invoiced!`;
+                    }
+                    if (window.showToast) window.showToast('Order saved to database successfully!', 'success');
+
+                    if (window.refreshAllWorkspaces) window.refreshAllWorkspaces();
+                    cleanupAfterSuccess('history');
+                } else {
+                    throw new Error(res ? res.error : 'Order save failed');
+                }
+            } catch (e) {
+                if (banner && bannerText) {
+                    banner.className = 'comp-status-banner error';
+                    if (spinner) spinner.style.display = 'none';
+                    bannerText.textContent = '❌ Save Failed: ' + (e.message || 'Unknown error');
+                }
+                if (window.showToast) window.showToast(e.message || 'Failed to save order', 'error');
+            } finally {
+                isWorkspaceActionBusy = false;
+                setActionsDisabled(false);
+            }
+        });
+    }
+
+    const btnActionSavePrint = document.getElementById('btn-action-save-print');
+    if (btnActionSavePrint) {
+        btnActionSavePrint.addEventListener('click', async () => {
+            if (isWorkspaceActionBusy) return;
+            if (!validateOrderBeforeAction()) return;
+
+            isWorkspaceActionBusy = true;
+            setActionsDisabled(true);
+
+            const banner = document.getElementById('comp-status-banner');
+            const spinner = document.getElementById('comp-banner-spinner');
+            const bannerText = document.getElementById('comp-banner-text');
+
+            if (banner && bannerText) {
+                banner.style.display = 'flex';
+                banner.className = 'comp-status-banner';
+                if (spinner) spinner.style.display = 'inline-block';
+                bannerText.textContent = 'Saving order & spooling print job...';
+            }
+
+            try {
+                let saveRes;
+                if (!savedOrderIdForRetry) {
+                    saveRes = await executeSave('SAVE_AND_PRINT');
+                    if (!saveRes || !saveRes.success) {
+                        throw new Error(saveRes ? saveRes.error : 'Order save failed');
+                    }
+                    savedOrderIdForRetry = saveRes.orderId;
+                }
+
+                const printResult = await executePrint();
+
+                if (printResult && printResult.success) {
+                    savedOrderIdForRetry = null;
                     if (banner && bannerText) {
                         banner.className = 'comp-status-banner success';
                         if (spinner) spinner.style.display = 'none';
@@ -837,79 +712,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     if (window.refreshAllWorkspaces) window.refreshAllWorkspaces();
                     cleanupAfterSuccess();
-                    btnActionSavePrint.disabled = false;
                 } else {
-                    throw new Error(res ? res.error : 'Order save failed');
-                }
-            } catch (e) {
-                const isCancelled = e.message && (
-                    e.message.toLowerCase().includes('cancel') ||
-                    e.message.toLowerCase().includes('abort')
-                );
-                if (banner && bannerText) {
-                    if (isCancelled) {
-                        banner.className = 'comp-status-banner info';
-                        if (spinner) spinner.style.display = 'none';
-                        bannerText.textContent = 'ℹ️ Print job cancelled by user.';
-                    } else {
-                        banner.className = 'comp-status-banner error';
-                        if (spinner) spinner.style.display = 'none';
-                        bannerText.textContent = '❌ Failed: ' + e.message;
-                    }
-                }
-                btnActionSavePrint.disabled = false;
-                if (window.showToast) {
-                    if (isCancelled) {
-                        window.showToast('Print cancelled by user.', 'info');
-                    } else {
-                        window.showToast(e.message, 'error');
-                    }
-                }
-            }
-        });
-    }
-
-    // -------------------------------------------------------------------------
-    // ACTION 2: PRINT ONLY (Secondary Button)
-    // -------------------------------------------------------------------------
-    const elBtnPrintOnly = document.getElementById('btn-action-print-only');
-    if (elBtnPrintOnly) {
-        elBtnPrintOnly.addEventListener('click', async () => {
-            if (!validateOrderBeforeAction()) return;
-
-            const banner = document.getElementById('comp-status-banner');
-            const spinner = document.getElementById('comp-banner-spinner');
-            const bannerText = document.getElementById('comp-banner-text');
-
-            elBtnPrintOnly.disabled = true;
-            if (banner && bannerText) {
-                banner.style.display = 'flex';
-                banner.className = 'comp-status-banner';
-                if (spinner) spinner.style.display = 'inline-block';
-                bannerText.textContent = 'Spooling document to printer (Direct Print Bypass)...';
-            }
-
-            try {
-                const printResult = await executePrint();
-
-                if (printResult && printResult.success) {
-                    if (banner && bannerText) {
-                        banner.className = 'comp-status-banner success';
-                        if (spinner) spinner.style.display = 'none';
-                        bannerText.textContent = '⚡ Direct Print Completed! No DB record saved.';
-                    }
-                    if (window.showToast) window.showToast('Direct print completed cleanly!', 'success');
-
-                    window.clearWorkspace();
-                    elBtnPrintOnly.disabled = false;
-                } else {
-                    const err = printResult ? printResult.error : 'Printer offline';
+                    const err = printResult ? printResult.error : 'Printer offline or failed to respond';
                     if (banner && bannerText) {
                         banner.className = 'comp-status-banner error';
                         if (spinner) spinner.style.display = 'none';
-                        bannerText.textContent = '⚠️ Printer Offline. Opening Diagnostic Modal...';
+                        bannerText.textContent = `⚠️ Order #${savedOrderIdForRetry} saved, but Printer Failed: ${err}`;
                     }
-                    elBtnPrintOnly.disabled = false;
+                    if (window.showToast) window.showToast(`Order #${savedOrderIdForRetry} saved. Printer error: ${err}`, 'warning');
                     const cfg = getActiveConfig();
                     window.showPrinterErrorModal(err, getPrintPayload(), {
                         printerName: cfg.default_printer || 'Default',
@@ -932,27 +742,99 @@ document.addEventListener('DOMContentLoaded', () => {
                     } else {
                         banner.className = 'comp-status-banner error';
                         if (spinner) spinner.style.display = 'none';
-                        bannerText.textContent = '❌ Failed: ' + e.message;
+                        bannerText.textContent = '❌ Failed: ' + (e.message || 'Unknown error');
                     }
                 }
-                elBtnPrintOnly.disabled = false;
                 if (window.showToast) {
-                    if (isCancelled) {
-                        window.showToast('Print cancelled by user.', 'info');
-                    } else {
-                        window.showToast(e.message, 'error');
-                    }
+                    window.showToast(isCancelled ? 'Print cancelled by user.' : (e.message || 'Error occurred'), isCancelled ? 'info' : 'error');
                 }
+            } finally {
+                isWorkspaceActionBusy = false;
+                setActionsDisabled(false);
             }
         });
     }
 
-    // -------------------------------------------------------------------------
-    // ACTION 3: SCHEDULE PRINT (Secondary Button)
-    // -------------------------------------------------------------------------
+    const elBtnPrintOnly = document.getElementById('btn-action-print-only');
+    if (elBtnPrintOnly) {
+        elBtnPrintOnly.addEventListener('click', async () => {
+            if (isWorkspaceActionBusy) return;
+            if (!validateOrderBeforeAction()) return;
+
+            isWorkspaceActionBusy = true;
+            setActionsDisabled(true);
+
+            const banner = document.getElementById('comp-status-banner');
+            const spinner = document.getElementById('comp-banner-spinner');
+            const bannerText = document.getElementById('comp-banner-text');
+
+            if (banner && bannerText) {
+                banner.style.display = 'flex';
+                banner.className = 'comp-status-banner';
+                if (spinner) spinner.style.display = 'inline-block';
+                bannerText.textContent = 'Spooling document to printer (Direct Print Bypass)...';
+            }
+
+            try {
+                const printResult = await executePrint();
+
+                if (printResult && printResult.success) {
+                    if (banner && bannerText) {
+                        banner.className = 'comp-status-banner success';
+                        if (spinner) spinner.style.display = 'none';
+                        bannerText.textContent = '⚡ Direct Print Completed! No DB record saved.';
+                    }
+                    if (window.showToast) window.showToast('Direct print completed cleanly!', 'success');
+
+                    window.clearWorkspace();
+                } else {
+                    const err = printResult ? printResult.error : 'Printer offline';
+                    if (banner && bannerText) {
+                        banner.className = 'comp-status-banner error';
+                        if (spinner) spinner.style.display = 'none';
+                        bannerText.textContent = '⚠️ Printer Offline. Opening Diagnostic Modal...';
+                    }
+                    const cfg = getActiveConfig();
+                    window.showPrinterErrorModal(err, getPrintPayload(), {
+                        printerName: cfg.default_printer || 'Default',
+                        printType: cfg.print_color_mode || cfg.printType,
+                        paperSize: cfg.print_paper_size || cfg.paperSize,
+                        sides: cfg.print_duplex || cfg.sides,
+                        copies: cfg.copies || 1
+                    });
+                }
+            } catch (e) {
+                const isCancelled = e.message && (
+                    e.message.toLowerCase().includes('cancel') ||
+                    e.message.toLowerCase().includes('abort')
+                );
+                if (banner && bannerText) {
+                    if (isCancelled) {
+                        banner.className = 'comp-status-banner info';
+                        if (spinner) spinner.style.display = 'none';
+                        bannerText.textContent = 'ℹ️ Print job cancelled by user.';
+                    } else {
+                        banner.className = 'comp-status-banner error';
+                        if (spinner) spinner.style.display = 'none';
+                        bannerText.textContent = '❌ Failed: ' + (e.message || 'Unknown error');
+                    }
+                }
+                if (window.showToast) {
+                    window.showToast(isCancelled ? 'Print cancelled by user.' : (e.message || 'Error occurred'), isCancelled ? 'info' : 'error');
+                }
+            } finally {
+                isWorkspaceActionBusy = false;
+                setActionsDisabled(false);
+            }
+        });
+    }
+
     const elBtnSchedule = document.getElementById('btn-action-schedule');
     if (elBtnSchedule) {
         elBtnSchedule.addEventListener('click', () => {
+            if (isWorkspaceActionBusy) return;
+            if (!validateOrderBeforeAction()) return;
+
             const cfg = getActiveConfig();
             if (typeof window.openScheduleProductionModal === 'function') {
                 window.openScheduleProductionModal(cfg);
@@ -968,7 +850,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const fname = first ? (first.name || first.fileName || (first.file ? first.file.name : null) || 'Print Job') : 'Print Job';
                         titleEl.textContent = fname;
                     }
-                    if (custEl) custEl.textContent = 'Customer: ' + (cfg.name || cfg.phone || 'Walk-in');
+                    if (custEl) custEl.textContent = 'Customer: ' + (cfg.name || cfg.phone || 'Walk-in Customer');
                     modal.style.setProperty('display', 'flex', 'important');
                     if (typeof window.renderMiniCalendar === 'function') window.renderMiniCalendar();
                 }
@@ -976,11 +858,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Schedule modal confirm handler
     const schedConfirmBtn = document.getElementById('sched-btn-confirm');
     if (schedConfirmBtn) {
         schedConfirmBtn.addEventListener('click', async () => {
-            console.log('[Schedule] Confirm button clicked');
+            if (isWorkspaceActionBusy) return;
+            isWorkspaceActionBusy = true;
+            setActionsDisabled(true);
+
             const modal = document.getElementById('schedule-production-modal');
             const schedDate = document.getElementById('sched-input-date')?.value || new Date().toISOString().split('T')[0];
             const schedTime = document.getElementById('sched-input-time')?.value || '10:00';
@@ -1004,7 +888,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             try {
-                console.log('[Schedule] Gathering schedule data...');
                 const scheduledDateTime = `${schedDate} ${schedTime}:00`;
                 const scheduleData = {
                     status: 'Waiting',
@@ -1017,11 +900,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     priority: priority,
                     notes: notes
                 };
-                
-                console.log('[Schedule] Schedule Data:', scheduleData);
 
                 if (window.currentJobToSchedule && (window.currentJobToSchedule.id || window.currentJobToSchedule.jobId)) {
-                    console.log('[Schedule] Updating existing job:', window.currentJobToSchedule);
                     const targetId = window.currentJobToSchedule.id || window.currentJobToSchedule.jobId;
                     if (window.api && window.api.productionScheduleJob) {
                         await window.api.productionScheduleJob(targetId, scheduleData);
@@ -1030,7 +910,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     window.currentJobToSchedule = null;
                 } else {
-                    console.log('[Schedule] Creating new scheduled order via executeSave...');
                     if (typeof executeSave !== 'function') throw new Error('executeSave function is missing');
                     await executeSave('SCHEDULE', scheduleData);
                 }
@@ -1040,9 +919,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (banner && bannerText) {
                     banner.className = 'comp-status-banner success';
                     if (spinner) spinner.style.display = 'none';
-                    bannerText.textContent = `📅 Job Scheduled for ${schedDate} ${schedTime} (${operator}) & Synced to Printing Queue!`;
+                    bannerText.textContent = `📅 Job Scheduled for ${schedDate} ${schedTime} (${operator}) & Synced to Production Queue!`;
                 }
-                if (window.showToast) window.showToast(`Job scheduled for ${schedDate} at ${schedTime} & synced to Printing Queue!`, 'success');
+                if (window.showToast) window.showToast(`Job scheduled for ${schedDate} at ${schedTime} & synced to Production Queue!`, 'success');
 
                 if (typeof cleanupAfterSuccess === 'function') {
                     cleanupAfterSuccess('production');
@@ -1055,6 +934,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     bannerText.textContent = '❌ Scheduling Failed: ' + (e.message || 'Unknown error occurred');
                 }
                 if (window.showToast) window.showToast('Scheduling Failed: ' + (e.message || 'Unknown error'), 'error');
+            } finally {
+                isWorkspaceActionBusy = false;
+                setActionsDisabled(false);
             }
         });
     }
@@ -1068,4 +950,3 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 });
-
