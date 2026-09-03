@@ -4547,7 +4547,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         window.showToast("One-Click reprint queued...", "info");
                         const res = await window.api.reprintJob(log.id);
                         if (res.success) {
-                            window.showToast("Reprint job complete!", "success");
+                            window.showToast("Reprint job queued successfully.", "success");
                         } else {
                             window.showToast(res.error || "Reprint failed", "error");
                         }

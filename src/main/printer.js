@@ -465,11 +465,20 @@ async function printFile(payload, printerName, options = {}) {
             if (['Submitted', 'Confirmed Printed', 'Cancelled', 'Preparing', 'Rendering', 'Submitting'].includes(existing.status)) {
                 throw new Error(`Cannot re-enqueue print job #${options.printJobId} in state '${existing.status}'. Create a new print job instead.`);
             }
+            let isTempFileVal = 0;
+            if (isTemp) {
+                isTempFileVal = 1;
+            } else if (options.filePath) {
+                isTempFileVal = (options.isTempFile || options.is_temp_file) ? 1 : 0;
+            } else {
+                isTempFileVal = (existing.is_temp_file === 1) ? 1 : 0;
+            }
+
             db.prepare(`
                 UPDATE print_jobs 
-                SET status = 'Queued', printer_name = ?, file_path = ?, pages = ?, copies = ?, error_message = NULL
+                SET status = 'Queued', printer_name = ?, file_path = ?, pages = ?, copies = ?, is_temp_file = ?, is_simulated = 0, error_message = NULL
                 WHERE id = ?
-            `).run(printerName || 'Default', targetFilePath, pageCount, options.copies || 1, options.printJobId);
+            `).run(printerName || 'Default', targetFilePath, pageCount, options.copies || 1, isTempFileVal, options.printJobId);
             job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(options.printJobId);
         } else {
             job = PrintQueueManager.enqueue({

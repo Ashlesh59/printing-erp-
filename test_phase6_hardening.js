@@ -876,7 +876,70 @@ async function runPhase6Suite() {
         assert.strictEqual(report.summary.purchaseReturnsValid, true);
     });
 
-    await runTest('Scenario 34: Uncertain job retains PDF on disk through requeue, and only deletes temp file upon terminal resolution', async () => {
+    await runTest('Scenario 34: Successful real-adapter submission deletes queue-owned temporary PDF', async () => {
+        const tempPdf = path.join(PrintQueueManager.getAppTempDir(), `success_cleanup_${Date.now()}.pdf`);
+        await createValidPdf(tempPdf, 'Successful Print Cleanup Test');
+        assert.ok(fs.existsSync(tempPdf));
+
+        const testAdapter = new TestSpoolerAdapter();
+        PrintQueueManager.setSpoolerAdapter(testAdapter);
+
+        const job = PrintQueueManager.enqueue({
+            filePath: tempPdf,
+            printerDeviceName: 'Success_Cleanup_Printer',
+            isTempFile: true
+        });
+        assert.strictEqual(job.is_temp_file, 1);
+
+        await PrintQueueManager.processQueue();
+
+        const submittedJob = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(job.id);
+        assert.strictEqual(submittedJob.status, 'Submitted');
+        assert.ok(testAdapter.invocations.some(inv => inv.jobId === job.id), 'TestAdapter recorded invocation for the job');
+        assert.strictEqual(fs.existsSync(tempPdf), false, 'Temporary PDF must be deleted upon successful spooler submission');
+
+        PrintQueueManager.resetSpoolerAdapter();
+    });
+
+    await runTest('Scenario 35: Simulator Mode distinctly records is_simulated=1 and deletes queue-owned temporary PDF after completion', async () => {
+        db.prepare('UPDATE settings SET print_simulator_enabled = 1 WHERE id = 1').run();
+
+        const simPdf = path.join(PrintQueueManager.getAppTempDir(), `simulator_test_${Date.now()}.pdf`);
+        await createValidPdf(simPdf, 'Simulator Test Content');
+        assert.ok(fs.existsSync(simPdf));
+
+        const testAdapter = new TestSpoolerAdapter();
+        PrintQueueManager.setSpoolerAdapter(testAdapter);
+
+        const job = PrintQueueManager.enqueue({
+            filePath: simPdf,
+            printerDeviceName: 'Sim_Printer',
+            isTempFile: true
+        });
+
+        await PrintQueueManager.processQueue();
+
+        // Verify physical / mock SpoolerAdapter was NEVER called
+        assert.strictEqual(testAdapter.invocations.length, 0, 'Spooler adapter must not be invoked during simulator execution');
+
+        const simJob = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(job.id);
+        assert.strictEqual(simJob.is_simulated, 1, 'is_simulated must be 1');
+        assert.strictEqual(simJob.status, 'Submitted');
+        assert.ok(simJob.error_message && simJob.error_message.includes('Simulated print delivery'), 'Truthful simulated notice recorded');
+
+        const attemptHistory = JSON.parse(simJob.attempt_history_json);
+        assert.ok(Array.isArray(attemptHistory) && attemptHistory.length > 0);
+        assert.strictEqual(attemptHistory[0].mode, 'SIMULATED');
+        assert.strictEqual(attemptHistory[0].is_simulated, 1);
+
+        // Queue-owned temporary PDF is cleaned up after terminal simulator completion
+        assert.strictEqual(fs.existsSync(simPdf), false, 'Queue-owned temp PDF must be deleted after simulator processing');
+
+        db.prepare('UPDATE settings SET print_simulator_enabled = 0 WHERE id = 1').run();
+        PrintQueueManager.resetSpoolerAdapter();
+    });
+
+    await runTest('Scenario 36: Uncertain job retains PDF on disk through requeue, and only deletes temp file upon terminal resolution', async () => {
         const tempPdf = path.join(PrintQueueManager.getAppTempDir(), `uncertain_retention_${Date.now()}.pdf`);
         await createValidPdf(tempPdf, 'Uncertain Document Retention Test');
         assert.ok(fs.existsSync(tempPdf));
@@ -915,7 +978,7 @@ async function runPhase6Suite() {
         PrintQueueManager.resetSpoolerAdapter();
     });
 
-    await runTest('Scenario 35: Permanent customer order files are NEVER deleted upon job completion or terminal resolution', async () => {
+    await runTest('Scenario 37: Permanent customer order files are NEVER deleted upon job completion or terminal resolution', async () => {
         const permanentDir = path.join(os.tmpdir(), `permanent_customer_orders_${Date.now()}`);
         if (!fs.existsSync(permanentDir)) fs.mkdirSync(permanentDir, { recursive: true });
         const permPdf = path.join(permanentDir, 'customer_contract.pdf');
@@ -946,42 +1009,51 @@ async function runPhase6Suite() {
         PrintQueueManager.resetSpoolerAdapter();
     });
 
-    await runTest('Scenario 36: Simulator Mode distinctly records is_simulated=1 without physical spooler invocation', async () => {
-        db.prepare('UPDATE settings SET print_simulator_enabled = 1 WHERE id = 1').run();
+    await runTest('Scenario 38: Existing printJobId update persists is_temp_file=1 for generated temp files and preserves is_temp_file=0 for permanent files', async () => {
+        // Step 1: Failed job with permanent file re-printed with generated temp content
+        const permDoc1 = path.join(os.tmpdir(), `perm_source_${Date.now()}.pdf`);
+        await createValidPdf(permDoc1, 'Permanent Source');
+        const initialJob1 = PrintQueueManager.enqueue({
+            filePath: permDoc1,
+            printerDeviceName: 'Requeue_Printer',
+            isTempFile: false
+        });
+        db.prepare("UPDATE print_jobs SET status = 'Failed' WHERE id = ?").run(initialJob1.id);
 
-        const simPdf = path.join(PrintQueueManager.getAppTempDir(), `simulator_test_${Date.now()}.pdf`);
-        await createValidPdf(simPdf, 'Simulator Test Content');
-        assert.ok(fs.existsSync(simPdf));
+        // Re-print using payload array (generates new unified temp PDF)
+        const reprintPayload = [{ path: permDoc1, ext: '.pdf' }];
+        const reprintRes = await printFile(reprintPayload, 'Requeue_Printer', { printJobId: initialJob1.id });
+        assert.strictEqual(reprintRes.success, true);
 
-        const testAdapter = new TestSpoolerAdapter();
-        PrintQueueManager.setSpoolerAdapter(testAdapter);
+        const updatedJob1 = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(initialJob1.id);
+        assert.ok(['Queued', 'Preparing', 'Rendering', 'Submitting', 'Submitted'].includes(updatedJob1.status));
+        assert.strictEqual(updatedJob1.is_temp_file, 1, 'Generated unified PDF must set is_temp_file=1');
+        assert.strictEqual(updatedJob1.is_simulated, 0, 'is_simulated must be reset to 0');
 
-        const job = PrintQueueManager.enqueue({
-            filePath: simPdf,
-            printerDeviceName: 'Sim_Printer',
+        // Step 2: Failed job with temporary file re-printed with an explicit permanent file
+        const permDoc2 = path.join(os.tmpdir(), `perm_source_2_${Date.now()}.pdf`);
+        await createValidPdf(permDoc2, 'Permanent Source 2');
+        const initialJob2 = PrintQueueManager.enqueue({
+            filePath: updatedJob1.file_path,
+            printerDeviceName: 'Requeue_Printer_2',
             isTempFile: true
         });
+        db.prepare("UPDATE print_jobs SET status = 'Failed' WHERE id = ?").run(initialJob2.id);
 
-        await PrintQueueManager.processQueue();
+        // Re-print using explicit permanent filePath
+        const reprintRes2 = await printFile(null, 'Requeue_Printer_2', { printJobId: initialJob2.id, filePath: permDoc2 });
+        assert.strictEqual(reprintRes2.success, true);
 
-        // Verify physical / mock SpoolerAdapter was NEVER called
-        assert.strictEqual(testAdapter.invocations.length, 0, 'Spooler adapter must not be invoked during simulator execution');
+        const updatedJob2 = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(initialJob2.id);
+        assert.ok(['Queued', 'Preparing', 'Rendering', 'Submitting', 'Submitted'].includes(updatedJob2.status));
+        assert.strictEqual(updatedJob2.is_temp_file, 0, 'Explicit permanent filePath must preserve is_temp_file=0');
+        assert.strictEqual(updatedJob2.is_simulated, 0);
 
-        const simJob = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(job.id);
-        assert.strictEqual(simJob.is_simulated, 1, 'is_simulated must be 1');
-        assert.strictEqual(simJob.status, 'Submitted');
-        assert.ok(simJob.error_message && simJob.error_message.includes('Simulated print delivery'), 'Truthful simulated notice recorded');
-
-        const attemptHistory = JSON.parse(simJob.attempt_history_json);
-        assert.ok(Array.isArray(attemptHistory) && attemptHistory.length > 0);
-        assert.strictEqual(attemptHistory[0].mode, 'SIMULATED');
-        assert.strictEqual(attemptHistory[0].is_simulated, 1);
-
-        db.prepare('UPDATE settings SET print_simulator_enabled = 0 WHERE id = 1').run();
-        PrintQueueManager.resetSpoolerAdapter();
+        try { fs.rmSync(permDoc1, { force: true }); } catch(e) {}
+        try { fs.rmSync(permDoc2, { force: true }); } catch(e) {}
     });
 
-    await runTest('Scenario 37: Production Spooler uses Node pathToFileURL producing valid Windows and Linux file URLs', () => {
+    await runTest('Scenario 39: Production Spooler uses Node pathToFileURL producing valid Windows and Linux file URLs', () => {
         const { pathToFileURL, fileURLToPath } = require('url');
 
         // Test current file path
@@ -1005,17 +1077,19 @@ async function runPhase6Suite() {
         assert.strictEqual(fileURLToPath(specialUrl), specialPath, 'fileURLToPath round-trips correctly');
     });
 
-    // Reset default SpoolerAdapter after testing
+    // Final resource cleanup
+    try { await stopServer(); } catch(e) {}
     PrintQueueManager.resetSpoolerAdapter();
 
     console.log('\n════════════════════════════════════════════════════════════════════════════');
-    console.log(`📊 PHASE 6.1 HARDENING SUMMARY: ${passedTests} PASSED, ${failedTests} FAILED`);
+    console.log(`📊 PHASE 6.2 HARDENING SUMMARY: ${passedTests} PASSED, ${failedTests} FAILED`);
     console.log('════════════════════════════════════════════════════════════════════════════\n');
 
     if (failedTests > 0) {
         process.exit(1);
     } else {
-        console.log('🌟 ALL 37 PHASE 6.1 PRODUCTION HARDENING WORKFLOWS PASSED WITH ZERO ERRORS!\n');
+        console.log('🌟 ALL 39 PHASE 6.2 PRODUCTION HARDENING WORKFLOWS PASSED WITH ZERO ERRORS!\n');
+        process.exit(0);
     }
 }
 

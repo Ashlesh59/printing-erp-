@@ -331,8 +331,8 @@ class PrintQueueManager {
             return;
         }
 
-        // Never delete an Uncertain or active in-flight job's source file
-        if (job && ['Uncertain', 'Queued', 'Preparing', 'Rendering', 'Submitting'].includes(job.status)) {
+        // Never delete an Uncertain, active in-flight, or Failed job (retaining for operator retry)
+        if (job && ['Uncertain', 'Queued', 'Preparing', 'Rendering', 'Submitting', 'Failed'].includes(job.status)) {
             return;
         }
 
@@ -414,7 +414,7 @@ class PrintQueueManager {
                     details: 'Print simulated to PrintSimulator folder'
                 }]), jobId);
 
-                this.cleanupJobTempFile(initialJob);
+                this.cleanupJobTempFile(jobId);
                 return { success: true, simulated: true };
             }
 
@@ -427,7 +427,7 @@ class PrintQueueManager {
 
             if (result.success) {
                 this.releaseJob(jobId, 'Submitted', null, [result.attemptDetails]);
-                this.cleanupJobTempFile(initialJob);
+                this.cleanupJobTempFile(jobId);
                 return { success: true };
             } else if (result.timeout || result.crashed) {
                 // Stalled or crashed during Submitting must transition to Uncertain
