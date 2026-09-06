@@ -100,6 +100,20 @@ class AuthThrottle {
     }
 
     /**
+     * Inject custom time provider (e.g. fake clock for testing)
+     */
+    setTimeProvider(fn) {
+        this.timeProvider = typeof fn === 'function' ? fn : () => Date.now();
+    }
+
+    /**
+     * Reset time provider to default Date.now
+     */
+    resetTimeProvider() {
+        this.timeProvider = () => Date.now();
+    }
+
+    /**
      * Reset all records (for testing purposes)
      */
     resetAll() {

@@ -2,7 +2,7 @@ name: CI / Production Hardening & Release Candidate Gate
 
 on:
   push:
-    branches: [ main, fix/phase-1-5-regression-repair, fix/phase-6-production-hardening, fix/phase-6.1-corrective-repair ]
+    branches: [ main, fix/phase-1-5-regression-repair, fix/phase-6-production-hardening, fix/phase-6.1-corrective-repair, fix/phase-6.3-auth-security-regression ]
   pull_request:
     branches: [ main ]
 
@@ -113,6 +113,14 @@ jobs:
       - name: Run Phase 6 Production Hardening & Release Candidate Suite (Windows)
         if: runner.os == 'Windows'
         run: npx electron test_phase6_hardening.js
+
+      - name: Run Phase 6.3 Auth Security & Lockout Suite (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npx electron --no-sandbox test_phase6_3_auth.js
+
+      - name: Run Phase 6.3 Auth Security & Lockout Suite (Windows)
+        if: runner.os == 'Windows'
+        run: npx electron test_phase6_3_auth.js
 
       - name: Windows Unpacked Packaging Check
         if: runner.os == 'Windows'

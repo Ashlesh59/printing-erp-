@@ -3758,7 +3758,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     function startLockoutTimer(lockedUntil) {
         const msgEl = document.getElementById('pin-lock-message');
         const submitBtn = document.getElementById('pin-submit-btn');
-        if (submitBtn) submitBtn.disabled = true;
+        const visibleInput = document.getElementById('pin-visible-input');
+        const hiddenInput = document.getElementById('pin-hidden-input');
+
+        // Disable submit button and inputs during lockout
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Locked 🔒';
+        }
+        if (visibleInput) visibleInput.disabled = true;
+        if (hiddenInput) hiddenInput.disabled = true;
+
+        // Safely clear entered PIN
+        pinBuffer = "";
+        if (visibleInput) visibleInput.value = "";
+        if (hiddenInput) hiddenInput.value = "";
+        updatePinDisplay();
 
         if (lockoutInterval) clearInterval(lockoutInterval);
 
@@ -3768,14 +3783,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (remainingMs <= 0) {
                 clearInterval(lockoutInterval);
                 lockoutInterval = null;
-                if (submitBtn) submitBtn.disabled = false;
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Unlock 🔓';
+                }
+                if (visibleInput) visibleInput.disabled = false;
+                if (hiddenInput) hiddenInput.disabled = false;
                 if (msgEl) {
                     msgEl.textContent = 'Lockout expired. You may now enter your PIN.';
                     msgEl.style.color = '#64748b';
                 }
                 window.clearPin();
+                const inputEl = visibleInput || hiddenInput;
+                if (inputEl) setTimeout(() => inputEl.focus(), 50);
             } else {
-                const sec = Math.ceil(remainingMs / 1000);
+                const sec = Math.max(1, Math.ceil(remainingMs / 1000));
                 if (msgEl) {
                     msgEl.textContent = `⏳ Terminal locked. Please wait ${sec}s...`;
                     msgEl.style.color = '#ef4444';
@@ -3817,7 +3839,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         try {
             const res = await window.api.login(pinBuffer, targetLoginRole);
-            if (res.success && res.session) {
+            if (res && res.success && res.session) {
                 const user = res.session.user;
                 document.getElementById('pin-lock-modal').classList.remove('active');
                 if (window.showToast) window.showToast(`Welcome, ${user.name} (${res.session.role})!`, "success");
@@ -3825,11 +3847,17 @@ document.addEventListener('DOMContentLoaded', async () => {
                 window.clearPin();
                 if (accessSuccessCallback) accessSuccessCallback(user);
             } else {
-                if (res.lockedUntil) {
+                if (res && res.locked === true) {
+                    const remSec = (typeof res.remainingSeconds === 'number' && Number.isFinite(res.remainingSeconds) && res.remainingSeconds > 0)
+                        ? res.remainingSeconds
+                        : (res.lockedUntil ? Math.max(0, Math.ceil((res.lockedUntil - Date.now()) / 1000)) : 30);
+                    const lockedUntil = Date.now() + (remSec * 1000);
+                    startLockoutTimer(lockedUntil);
+                } else if (res && res.lockedUntil) {
                     startLockoutTimer(res.lockedUntil);
                 } else {
                     if (msgEl) {
-                        msgEl.textContent = res.error || "Invalid PIN. Access denied.";
+                        msgEl.textContent = (res && res.error) || "Invalid PIN. Access denied.";
                         msgEl.style.color = '#ef4444';
                     }
                     window.clearPin();

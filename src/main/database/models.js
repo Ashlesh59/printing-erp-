@@ -963,6 +963,10 @@ const UserModel = {
                     users = db.prepare("SELECT id, name, role, pin, reset_required FROM users WHERE role = 'Admin' AND reset_required = 0 AND pin IS NOT NULL AND pin != ''").all();
                 } else if (expectedRole === 'Shop') {
                     users = db.prepare("SELECT id, name, role, pin, reset_required FROM users WHERE role IN ('Operator', 'Manager', 'Admin') AND reset_required = 0 AND pin IS NOT NULL AND pin != ''").all();
+                } else if (expectedRole === 'Operator') {
+                    users = db.prepare("SELECT id, name, role, pin, reset_required FROM users WHERE role = 'Operator' AND reset_required = 0 AND pin IS NOT NULL AND pin != ''").all();
+                } else if (expectedRole === 'Manager') {
+                    users = db.prepare("SELECT id, name, role, pin, reset_required FROM users WHERE role = 'Manager' AND reset_required = 0 AND pin IS NOT NULL AND pin != ''").all();
                 } else {
                     users = db.prepare("SELECT id, name, role, pin, reset_required FROM users WHERE reset_required = 0 AND pin IS NOT NULL AND pin != ''").all();
                 }
@@ -986,24 +990,6 @@ const UserModel = {
                 if (check.match) {
                     authThrottle.recordSuccess(senderId, expectedRole);
                     const { pin, ...userData } = user;
-                    return { success: true, user: userData };
-                }
-            }
-
-            // Developer / local testing fallback for unpackaged builds
-            const isPackaged = (() => {
-                try {
-                    const { app } = require('electron');
-                    return app && app.isPackaged === true;
-                } catch(e) { return false; }
-            })();
-
-            const DEV_TEST_PINS = new Set(['938472', '852963', '147258', '582914', '739104', '849201']);
-            if (!isPackaged && DEV_TEST_PINS.has(cleanPin)) {
-                const targetUser = users.find(u => expectedRole === 'Admin' ? u.role === 'Admin' : true) || users[0];
-                if (targetUser) {
-                    authThrottle.recordSuccess(senderId, expectedRole);
-                    const { pin, ...userData } = targetUser;
                     return { success: true, user: userData };
                 }
             }

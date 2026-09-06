@@ -13,8 +13,9 @@
     "test:phase5": "electron test_phase5_purchasing.js",
     "test:phase5:matrix": "electron test_phase5_matrix.js",
     "test:phase6": "electron test_phase6_hardening.js",
+    "test:phase6:auth": "electron test_phase6_3_auth.js",
     "test:integration": "electron test_integration_suite.js",
-    "test:all": "electron test_phase1_security.js && electron test_phase2_lifecycle.js && electron test_phase3_printing.js && electron test_phase4_inventory.js && electron test_phase5_purchasing.js && electron test_phase6_hardening.js",
+    "test:all": "electron test_phase1_security.js && electron test_phase2_lifecycle.js && electron test_phase3_printing.js && electron test_phase4_inventory.js && electron test_phase5_purchasing.js && electron test_phase6_hardening.js && electron test_phase6_3_auth.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "postinstall": "electron-builder install-app-deps"
