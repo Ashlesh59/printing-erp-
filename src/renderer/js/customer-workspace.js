@@ -215,19 +215,20 @@
                 offset: offset
             });
 
+            const safeResults = Array.isArray(results) ? results : [];
             if (append) {
-                loadedCustomers = loadedCustomers.concat(results || []);
+                loadedCustomers = (Array.isArray(loadedCustomers) ? loadedCustomers : []).concat(safeResults);
             } else {
-                loadedCustomers = results || [];
+                loadedCustomers = safeResults;
             }
 
-            offset += (results || []).length;
+            offset += safeResults.length;
 
             const countEl = document.getElementById('cw-list-count');
             if (countEl) countEl.textContent = `${loadedCustomers.length} Customers`;
 
             const pgnEl = document.getElementById('cw-pagination');
-            if (pgnEl) pgnEl.style.display = (results || []).length === limit ? 'block' : 'none';
+            if (pgnEl) pgnEl.style.display = safeResults.length === limit ? 'block' : 'none';
 
             renderCustomerList();
 

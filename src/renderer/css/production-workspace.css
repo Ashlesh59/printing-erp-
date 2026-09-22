@@ -66,13 +66,13 @@
     width: 36px;
     height: 36px;
     border-radius: 8px;
-    background: #fff1f2;
-    color: #dc2626;
+    background: #fdf5f5;
+    color: var(--primary-color, #710014);
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 1.1rem;
-    border: 1px solid #fecdd3;
+    border: 1px solid #f2dede;
 }
 
 .ps-header-main-title {
@@ -117,7 +117,7 @@
 
 .ps-role-tab.active {
     background: #ffffff;
-    color: #dc2626;
+    color: var(--primary-color, #710014);
     font-weight: 700;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
@@ -156,8 +156,8 @@
 }
 
 .ps-search-input:focus {
-    border-color: #dc2626;
-    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+    border-color: var(--primary-color, #710014);
+    box-shadow: 0 0 0 3px rgba(113, 0, 20, 0.12);
 }
 
 .ps-sort-select {
@@ -187,11 +187,11 @@
 
 .ps-icon-text-btn:hover {
     background: #f8fafc;
-    border-color: #dc2626;
+    border-color: var(--primary-color, #710014);
 }
 
 .ps-btn-auto-schedule {
-    background: #dc2626;
+    background: var(--primary-color, #710014);
     color: #ffffff;
     border: none;
     border-radius: 8px;
@@ -206,7 +206,7 @@
 }
 
 .ps-btn-auto-schedule:hover {
-    background: #b91c1c;
+    background: #8e0019;
 }
 
 /* --- 2. COLLAPSIBLE FILTER DRAWER --- */
@@ -267,7 +267,7 @@
 .ps-job-card:hover {
     transform: translateY(-2px);
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.06);
-    border-color: #dc2626;
+    border-color: var(--primary-color, #710014);
 }
 
 .ps-job-card.dragging {
@@ -500,8 +500,8 @@
 }
 
 .ps-week-column.drag-over {
-    border-color: #dc2626;
-    background: rgba(220, 38, 38, 0.02);
+    border-color: var(--primary-color, #710014);
+    background: rgba(113, 0, 20, 0.02);
 }
 
 .ps-week-col-header {

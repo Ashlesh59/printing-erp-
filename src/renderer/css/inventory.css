@@ -64,7 +64,7 @@
 
 .inv-sub-btn.active {
     background: var(--accent-color);
-    color: rgb(237, 189, 192);
+    color: #ffffff;
     box-shadow: 0 4px 15px rgba(var(--accent-rgb), 0.25);
 }
 

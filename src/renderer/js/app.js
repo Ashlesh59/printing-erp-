@@ -509,19 +509,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             
             // Cloud Sync Indicator
             if (window.api.getCloudSettings) {
-                const cloudSettings = await window.api.getCloudSettings();
-                const statusSpan = document.getElementById('dash-cloud-status');
-                if (statusSpan) {
-                    if (cloudSettings && cloudSettings.cloudUrl && cloudSettings.shopId) {
-                        statusSpan.innerHTML = `<span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--success-color);"></span> Cloud Sync Active`;
-                        statusSpan.style.color = 'var(--success-color)';
-                        statusSpan.style.background = 'rgba(16, 185, 129, 0.1)';
-                    } else {
-                        statusSpan.innerHTML = `<span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #64748b;"></span> Local Only`;
-                        statusSpan.style.color = 'var(--text-secondary)';
-                        statusSpan.style.background = 'rgba(100,116,139,0.1)';
+                try {
+                    const cloudSettings = await window.api.getCloudSettings();
+                    const statusSpan = document.getElementById('dash-cloud-status');
+                    if (statusSpan) {
+                        if (cloudSettings && cloudSettings.cloudUrl && cloudSettings.shopId) {
+                            statusSpan.innerHTML = `<span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--success-color);"></span> Cloud Sync Active`;
+                            statusSpan.style.color = 'var(--success-color)';
+                            statusSpan.style.background = 'rgba(16, 185, 129, 0.1)';
+                        } else {
+                            statusSpan.innerHTML = `<span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #64748b;"></span> Local Only`;
+                            statusSpan.style.color = 'var(--text-secondary)';
+                            statusSpan.style.background = 'rgba(100,116,139,0.1)';
+                        }
                     }
-                }
+                } catch (err) {}
             }
 
             const elRevenueToday = document.getElementById('dash-revenue-today');
@@ -544,7 +546,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             
             const d = new Date();
             const todayStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-            const recentOrders = await window.api.getRecentOrders();
+            const recentOrdersRaw = await window.api.getRecentOrders();
+            const recentOrders = Array.isArray(recentOrdersRaw) ? recentOrdersRaw : [];
             const todaysOrders = recentOrders.filter(o => o.created_at && o.created_at.startsWith(todayStr));
             
             let completed = 0, pending = 0, processing = 0, cancelled = 0;
@@ -663,12 +666,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             let prodJobs = [];
             if (window.api && window.api.productionGetJobs) {
                 try {
-                    prodJobs = await window.api.productionGetJobs({});
-                } catch(e) {}
+                    const rawProdJobs = await window.api.productionGetJobs({});
+                    prodJobs = Array.isArray(rawProdJobs) ? rawProdJobs : [];
+                } catch(e) {
+                    prodJobs = [];
+                }
             }
 
             const todayDateStr = new Date().toISOString().split('T')[0];
-            const todayScheduledJobs = (prodJobs || []).filter(j => {
+            const safeProdJobs = Array.isArray(prodJobs) ? prodJobs : [];
+            const todayScheduledJobs = safeProdJobs.filter(j => {
                 const isScheduledStatus = j.status === 'Scheduled' || j.status === 'Waiting' || j.status === 'Printing';
                 const schedDate = j.scheduled_start ? j.scheduled_start.split(' ')[0] : (j.due_time ? j.due_time.split(' ')[0] : '');
                 return isScheduledStatus && (schedDate === todayDateStr || !schedDate || j.status === 'Scheduled');
@@ -692,7 +699,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             // Update Timeline
             const dashTimeline = document.getElementById('dash-schedule-timeline');
             if (dashTimeline) {
-                const jobsToDisplay = todayScheduledJobs.length > 0 ? todayScheduledJobs : (prodJobs.slice(0, 5));
+                const jobsToDisplay = todayScheduledJobs.length > 0 ? todayScheduledJobs : (safeProdJobs.slice(0, 5));
                 if (jobsToDisplay.length === 0) {
                     dashTimeline.innerHTML = '<p class="empty-state" style="text-align: center; margin: auto; padding: 20px;">No scheduled jobs for today.</p>';
                 } else {
@@ -745,7 +752,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             const invAlertsTbody = document.getElementById('inv-alerts-tbody');
             if (invAlertsTbody && window.api && window.api.getInvAlerts) {
                 try {
-                    const alerts = await window.api.getInvAlerts();
+                    const rawAlerts = await window.api.getInvAlerts();
+                    const alerts = Array.isArray(rawAlerts) ? rawAlerts : [];
                     if (alerts.length === 0) {
                         invAlertsTbody.innerHTML = '<tr><td colspan="2" class="empty-state" style="text-align: center; padding: 16px;">No low stock alerts.</td></tr>';
                     } else {
@@ -1150,14 +1158,42 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const div = document.createElement('div');
             div.className = 'ws-file-row';
+            div.id = `ws-file-row-${index}`;
+            
+            const initialPageText = file.pages ? `${file.pages} ${file.pages === 1 ? 'page' : 'pages'}` : (ext === '.pdf' ? 'Scanning...' : '1 page');
+
             div.innerHTML = `
                 <div class="ws-file-icon">${icon}</div>
                 <div class="ws-file-info">
                     <div class="ws-file-name" title="${fileName}">${fileName}</div>
-                    <div class="ws-file-meta">${extLabel}&nbsp;•&nbsp;${sizeKB}</div>
+                    <div class="ws-file-meta">
+                        <span class="ws-file-badge">${extLabel}</span>
+                        <span>•</span>
+                        <span class="ws-file-pages" id="ws-file-pages-${index}">${initialPageText}</span>
+                        <span>•</span>
+                        <span>${sizeKB}</span>
+                    </div>
                 </div>
-                <button class="ws-file-del" data-index="${index}" title="Remove">✕</button>
+                <button class="ws-file-del" data-index="${index}" title="Remove file">✕</button>
             `;
+
+            // Asynchronously resolve PDF page count if needed
+            if (ext === '.pdf' && !file.pages && window.pdfjsLib && file.path) {
+                const encodedPath = encodeURI(file.path.replace(/\\/g, '/')).replace(/#/g, '%23');
+                window.pdfjsLib.getDocument(`app-file:///${encodedPath}`).promise
+                    .then(pdf => {
+                        file.pages = pdf.numPages;
+                        const pageEl = document.getElementById(`ws-file-pages-${index}`);
+                        if (pageEl) pageEl.textContent = `${pdf.numPages} ${pdf.numPages === 1 ? 'page' : 'pages'}`;
+                        if (window.updateWorkspace) window.updateWorkspace();
+                    })
+                    .catch(() => {
+                        file.pages = 1;
+                        const pageEl = document.getElementById(`ws-file-pages-${index}`);
+                        if (pageEl) pageEl.textContent = '1 page';
+                    });
+            }
+
             div.querySelector('.ws-file-del').addEventListener('click', (e) => {
                 const idx = parseInt(e.currentTarget.getAttribute('data-index'));
                 currentOrderFiles.splice(idx, 1);
@@ -1228,67 +1264,105 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
 
-    // Customer Search
-    if (setupPhone) {
-        setupPhone.addEventListener('input', async (e) => {
-            const val = e.target.value.trim();
+    // Customer Search (Dual Phone & Name)
+    let custSearchDebounceTimer = null;
+    const executeCustomerSearch = (query) => {
+        clearTimeout(custSearchDebounceTimer);
+        custSearchDebounceTimer = setTimeout(async () => {
+            const val = query ? query.trim() : '';
             currentCustomerId = null;
-            if(btnViewHistory) btnViewHistory.style.display = 'none';
+            if (btnViewHistory) btnViewHistory.style.display = 'none';
 
-            if (val.length < 3) {
-                searchResults.style.display = 'none';
+            if (val.length < 2) {
+                if (searchResults) searchResults.style.display = 'none';
                 return;
             }
-            if (window.api && window.api.searchCustomers) {
-                const results = await window.api.searchCustomers(val);
-                if (results.length > 0) {
-                    searchResults.innerHTML = results.map(r => 
-                        `<div class="search-result-item" data-id="${r.id}" data-name="${r.name}" data-phone="${r.phone}" data-gstin="${r.gstin || ''}" data-state="${r.state || 'Local'}">
-                            ${r.phone} - ${r.name}
-                        </div>`
-                    ).join('');
+
+            if (window.api && (window.api.searchCustomers || window.api.searchCustomersAdvanced)) {
+                let results = [];
+                try {
+                    if (window.api.searchCustomersAdvanced) {
+                        results = await window.api.searchCustomersAdvanced({ query: val, limit: 8 });
+                    } else if (window.api.searchCustomers) {
+                        results = await window.api.searchCustomers(val);
+                    }
+                } catch(err) {
+                    console.warn('[Customer Search] Error:', err);
+                }
+                
+                if (results && results.length > 0) {
+                    searchResults.innerHTML = results.map(r => `
+                        <div class="search-result-item" data-id="${r.id}" data-name="${r.name}" data-phone="${r.phone}" data-gstin="${r.gstin || ''}" data-state="${r.state || 'Local'}">
+                            <div style="font-weight:700; color:var(--text-primary); font-size:0.88rem;">${r.name}</div>
+                            <div style="font-size:0.75rem; color:var(--text-secondary); display:flex; gap:10px; margin-top:2px;">
+                                <span>📞 ${r.phone}</span>
+                                ${r.gstin ? `<span>💼 ${r.gstin}</span>` : ''}
+                            </div>
+                        </div>
+                    `).join('');
                     searchResults.style.display = 'block';
 
-                    document.querySelectorAll('.search-result-item').forEach(item => {
+                    searchResults.querySelectorAll('.search-result-item').forEach(item => {
                         item.addEventListener('click', (ev) => {
                             const target = ev.currentTarget;
-                            setupPhone.value = target.getAttribute('data-phone');
-                            setupName.value = target.getAttribute('data-name');
+                            if (setupPhone) setupPhone.value = target.getAttribute('data-phone') || '';
+                            if (setupName) setupName.value = target.getAttribute('data-name') || '';
                             currentCustomerId = target.getAttribute('data-id');
                             searchResults.style.display = 'none';
-                            
+
                             const gstinVal = target.getAttribute('data-gstin') || '';
                             const stateVal = target.getAttribute('data-state') || 'Local';
-                            
+
                             const setupGstinInput = document.getElementById('setup-gstin');
                             const setupStateSelect = document.getElementById('setup-state');
                             if (setupGstinInput) setupGstinInput.value = gstinVal;
                             if (setupStateSelect) setupStateSelect.value = stateVal;
-                            
-                            if(btnViewHistory) btnViewHistory.style.display = 'block';
 
-                            // Smart Defaults
+                            if (btnViewHistory) btnViewHistory.style.display = 'block';
+
+                            const bn = document.getElementById('billing-customer-name');
+                            const bp = document.getElementById('billing-customer-phone');
+                            if (bn) bn.textContent = setupName.value || 'Walk-in Customer';
+                            if (bp) bp.textContent = setupPhone.value || '—';
+                            if (window.updateWorkspace) window.updateWorkspace();
+
+                            // Smart cached defaults
                             try {
                                 const cachedPrefs = localStorage.getItem(`prefs_${setupPhone.value}`);
                                 if (cachedPrefs) {
                                     const prefs = JSON.parse(cachedPrefs);
                                     if (prefs.paperSize && setupPaperSize) setupPaperSize.value = prefs.paperSize;
                                     if (prefs.printType && setupPrintType) setupPrintType.value = prefs.printType;
-                                    if (window.showToast) window.showToast("Loaded previous print settings", "info");
+                                    if (window.showToast) window.showToast("Loaded customer print preferences", "info");
                                 }
-                            } catch(e) {}
+                            } catch (e) {}
                         });
                     });
                 } else {
-                    searchResults.style.display = 'none';
+                    if (searchResults) searchResults.style.display = 'none';
                 }
             }
+        }, 150);
+    };
+
+    if (setupPhone) {
+        setupPhone.addEventListener('input', (e) => {
+            executeCustomerSearch(e.target.value);
+            const bp = document.getElementById('billing-customer-phone');
+            if (bp) bp.textContent = setupPhone.value.trim() || '—';
+        });
+    }
+
+    if (setupName) {
+        setupName.addEventListener('input', (e) => {
+            const bn = document.getElementById('billing-customer-name');
+            if (bn) bn.textContent = setupName.value.trim() || 'Walk-in Customer';
         });
     }
 
     document.addEventListener('click', (e) => {
-        if (e.target !== setupPhone && e.target !== searchResults) {
-            if(searchResults) searchResults.style.display = 'none';
+        if (e.target !== setupPhone && e.target !== searchResults && (!searchResults || !searchResults.contains(e.target))) {
+            if (searchResults) searchResults.style.display = 'none';
         }
     });
 
@@ -1841,7 +1915,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         let rawOrders = await window.api.getRecentOrders(ordersLimit, ordersOffset);
-        cachedHistoryOrders = rawOrders || [];
+        cachedHistoryOrders = Array.isArray(rawOrders) ? rawOrders : [];
         let orders = cachedHistoryOrders;
         
         // Status filter
@@ -3097,8 +3171,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             const items = await window.api.getInvItems();
             const select = document.getElementById('pricing-inventory-item');
             if (!select) return;
+            const itemsList = Array.isArray(items) ? items : [];
             select.innerHTML = '<option value="">No Stock Tracking</option>' +
-                (items || []).map(item => `<option value="${item.id}">${item.name} (${item.sku})</option>`).join('');
+                itemsList.map(item => `<option value="${item.id}">${item.name} (${item.sku})</option>`).join('');
         } catch (e) {
             console.error("Failed to populate pricing inventory dropdown:", e);
         }
@@ -3112,11 +3187,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             const tbody = document.getElementById('pricing-table-body');
             if (!tbody) return;
             tbody.innerHTML = '';
-            if (!items || items.length === 0) {
+            const itemsList = Array.isArray(items) ? items : [];
+            if (itemsList.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color: var(--text-secondary);">No pricing items yet. Add one above.</td></tr>';
                 return;
             }
-            items.forEach(item => {
+            itemsList.forEach(item => {
                 const catBadge = item.category === 'paper'
                     ? '<span style="background:#3b82f6; color:white; padding:2px 8px; border-radius:4px; font-size:0.8rem;">Paper</span>'
                     : '<span style="background:#8b5cf6; color:white; padding:2px 8px; border-radius:4px; font-size:0.8rem;">Extra</span>';
@@ -5009,62 +5085,44 @@ document.addEventListener('DOMContentLoaded', async () => {
                 addFieldToSection(f.section || "Product Specifications", fieldHtml);
             });
 
-            const layoutVal = window.currentOrderConfigGlobal.nUp;
-            addFieldToSection("Print Settings", `
-                <div class="ws-opt-row">
-                    <label class="ws-opt-label">Layout</label>
-                    <select id="layout-images-per-page" class="ws-opt-select">
-                        <option value="1" ${layoutVal == 1 ? 'selected' : ''}>1-up (Full Page)</option>
-                        <option value="2" ${layoutVal == 2 ? 'selected' : ''}>2-up (Half Page)</option>
-                        <option value="4" ${layoutVal == 4 ? 'selected' : ''}>4-up (Quarter)</option>
-                    </select>
-                </div>
-                <div class="ws-opt-row">
-                    <label class="ws-opt-label">Page Range</label>
-                    <input type="text" id="setup-page-range" class="ws-opt-select" placeholder="e.g. 1-3, 5 (Optional)" style="width: 170px; text-align: left; padding: 8px 12px; font-size: 0.85rem;" value="${window.currentOrderConfigGlobal.pageRange}">
-                </div>
-            `);
+            const sectionOrder = ["Product Specifications", "Material", "Dimensions", "Finishing"];
+            const hasCustomSections = sectionOrder.some(sec => sections[sec] && sections[sec].length > 0) || Object.keys(sections).length > 0;
 
-            const copiesVal = window.currentOrderConfigGlobal.copies;
-            addFieldToSection("Quantity", `
-                <div class="ws-opt-row">
-                    <label class="ws-opt-label">Copies</label>
-                    <div class="ws-stepper">
-                        <button class="ws-stepper-btn" id="copies-minus" type="button">−</button>
-                        <input type="number" id="setup-copies" class="ws-stepper-input" value="${copiesVal}" min="1">
-                        <button class="ws-stepper-btn" id="copies-plus" type="button">+</button>
-                    </div>
-                </div>
-            `);
-
-            let html = `
-                <div class="ws-card" style="margin-bottom: 16px;">
-                    <div class="ws-card-title">⚙️ Job Configuration (${profile.name})</div>
-                    <div style="display: flex; flex-direction: column; gap: 18px; padding-top: 6px;">
-            `;
-
-            const sectionOrder = ["Product Specifications", "Print Settings", "Material", "Dimensions", "Finishing", "Quantity"];
-            sectionOrder.forEach(sec => {
-                if (sections[sec] && sections[sec].length > 0) {
-                    html += `
-                        <div class="config-section-block" style="border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 12px;">
-                            <div style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 10px; letter-spacing: 0.5px;">${sec}</div>
-                            <div style="display: flex; flex-direction: column; gap: 10px;">
-                                ${sections[sec].join('')}
+            if (hasCustomSections && fields.length > 0) {
+                let html = `
+                    <div class="ws-card" style="margin-top: 14px; margin-bottom: 4px; border-color: rgba(179, 143, 111, 0.3);">
+                        <div class="ws-card-header" style="margin-bottom: 12px;">
+                            <div class="ws-card-title-group">
+                                <span class="ws-card-icon">📋</span>
+                                <h4 class="ws-card-title" style="font-size: 0.8rem !important;">${profile.name} Specifications</h4>
                             </div>
                         </div>
-                    `;
-                }
-            });
+                        <div style="display: flex; flex-direction: column; gap: 14px;">
+                `;
 
-            html += `
-                        <div id="config-validation-errors" style="display: none; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 10px; color: #ef4444; font-size: 0.78rem;">
+                Object.keys(sections).forEach(sec => {
+                    if (sections[sec] && sections[sec].length > 0) {
+                        html += `
+                            <div class="config-section-block">
+                                <div style="font-size: 0.72rem; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 8px; letter-spacing: 0.04em;">${sec}</div>
+                                <div class="ws-form-grid-3" style="gap: 10px;">
+                                    ${sections[sec].join('')}
+                                </div>
+                            </div>
+                        `;
+                    }
+                });
+
+                html += `
+                            <div id="config-validation-errors" style="display: none; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 10px; color: #ef4444; font-size: 0.78rem;">
+                            </div>
                         </div>
                     </div>
-                </div>
-            `;
-
-            container.innerHTML = html;
+                `;
+                container.innerHTML = html;
+            } else {
+                container.innerHTML = '';
+            }
 
             const updateSpecs = () => {
                 container.querySelectorAll('.config-input-field').forEach(input => {

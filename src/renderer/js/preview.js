@@ -548,6 +548,42 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    window.showOrderSuccessRapidPanel = function(orderId, price) {
+        const rapidPanel = document.getElementById('order-success-rapid-panel');
+        const ctaContainer = document.getElementById('ws-primary-cta-container');
+        const titleEl = document.getElementById('ws-sp-title');
+        const subEl = document.getElementById('ws-sp-sub');
+
+        if (rapidPanel) {
+            if (titleEl) titleEl.textContent = `Order #${orderId || ''} Created!`;
+            const numPrice = typeof price === 'number' ? price : (parseFloat(price) || 0);
+            if (subEl) subEl.textContent = `Total: ₹${numPrice.toFixed(2)} • Invoiced & Saved`;
+            rapidPanel.style.display = 'flex';
+            if (ctaContainer) ctaContainer.style.display = 'none';
+
+            const btnReprint = document.getElementById('btn-sp-reprint');
+            if (btnReprint) {
+                btnReprint.onclick = async () => {
+                    btnReprint.textContent = 'Spooling...';
+                    await executePrint();
+                    btnReprint.textContent = '🖨️ Print Again';
+                };
+            }
+            const btnHistory = document.getElementById('btn-sp-view-history');
+            if (btnHistory) {
+                btnHistory.onclick = () => {
+                    const histNav = document.querySelector('.nav-btn[data-target="history"]');
+                    if (histNav) histNav.click();
+                };
+            }
+
+            const btnNext = document.getElementById('btn-start-next-order');
+            if (btnNext) {
+                setTimeout(() => btnNext.focus(), 100);
+            }
+        }
+    };
+
     window.clearWorkspace = function() {
         savedOrderIdForRetry = null;
         if (typeof window.currentOrderFiles !== 'undefined') window.currentOrderFiles = [];
@@ -574,7 +610,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const bn = document.getElementById('billing-customer-name');
         const bp = document.getElementById('billing-customer-phone');
-        if (bn) bn.textContent = '—';
+        if (bn) bn.textContent = 'Walk-in Customer';
         if (bp) bp.textContent = '—';
 
         try {
@@ -584,12 +620,111 @@ document.addEventListener('DOMContentLoaded', () => {
         const banner = document.getElementById('comp-status-banner');
         if (banner) banner.style.display = 'none';
 
+        const rapidPanel = document.getElementById('order-success-rapid-panel');
+        if (rapidPanel) rapidPanel.style.display = 'none';
+
+        const ctaContainer = document.getElementById('ws-primary-cta-container');
+        if (ctaContainer) ctaContainer.style.display = 'flex';
+
         if (typeof renderAttachedFiles === 'function') renderAttachedFiles();
         if (typeof window.updateWorkspace === 'function') window.updateWorkspace();
         if (typeof goToStep === 'function') goToStep(1);
     };
 
-    function cleanupAfterSuccess(targetView = 'dashboard') {
+    const btnStartNextOrder = document.getElementById('btn-start-next-order');
+    if (btnStartNextOrder) {
+        btnStartNextOrder.addEventListener('click', () => {
+            window.clearWorkspace();
+            const setupPhone = document.getElementById('setup-phone');
+            if (setupPhone) setupPhone.focus();
+        });
+    }
+
+    const btnQuickWalkin = document.getElementById('btn-quick-walkin');
+    if (btnQuickWalkin) {
+        btnQuickWalkin.addEventListener('click', () => {
+            const setupPhone = document.getElementById('setup-phone');
+            const setupName = document.getElementById('setup-name');
+            if (setupPhone) setupPhone.value = '9999999999';
+            if (setupName) setupName.value = 'Walk-in Customer';
+            
+            const bn = document.getElementById('billing-customer-name');
+            const bp = document.getElementById('billing-customer-phone');
+            if (bn) bn.textContent = 'Walk-in Customer';
+            if (bp) bp.textContent = '9999999999';
+
+            if (setupPhone) setupPhone.dispatchEvent(new Event('input', { bubbles: true }));
+            if (setupName) setupName.dispatchEvent(new Event('input', { bubbles: true }));
+            if (window.showToast) window.showToast('Walk-in customer selected', 'info');
+        });
+    }
+
+    const btnResetOrder = document.getElementById('btn-reset-order');
+    if (btnResetOrder) {
+        btnResetOrder.addEventListener('click', () => {
+            if (confirm('Clear current workspace and start fresh?')) {
+                window.clearWorkspace();
+                const setupPhone = document.getElementById('setup-phone');
+                if (setupPhone) setupPhone.focus();
+            }
+        });
+    }
+
+    const btnCopiesMinus = document.getElementById('btn-copies-minus');
+    const btnCopiesPlus = document.getElementById('btn-copies-plus');
+    const setupCopies = document.getElementById('setup-copies');
+
+    if (btnCopiesMinus && setupCopies) {
+        btnCopiesMinus.addEventListener('click', () => {
+            let val = parseInt(setupCopies.value, 10) || 1;
+            if (val > 1) {
+                setupCopies.value = val - 1;
+                setupCopies.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        });
+    }
+    if (btnCopiesPlus && setupCopies) {
+        btnCopiesPlus.addEventListener('click', () => {
+            let val = parseInt(setupCopies.value, 10) || 1;
+            setupCopies.value = val + 1;
+            setupCopies.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+    }
+    document.querySelectorAll('.ws-chip-btn[data-add]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (!setupCopies) return;
+            const addVal = parseInt(btn.getAttribute('data-add'), 10) || 0;
+            let current = parseInt(setupCopies.value, 10) || 0;
+            setupCopies.value = Math.max(1, current + addVal);
+            setupCopies.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+    });
+
+    // Keyboard Shortcuts for Rapid Counter Operation
+    document.addEventListener('keydown', (e) => {
+        const workspaceView = document.getElementById('workspace');
+        if (!workspaceView || !workspaceView.classList.contains('active')) return;
+
+        const rapidPanel = document.getElementById('order-success-rapid-panel');
+        if (rapidPanel && rapidPanel.style.display !== 'none') {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                const btnNext = document.getElementById('btn-start-next-order');
+                if (btnNext) btnNext.click();
+                return;
+            }
+        }
+
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            const btnSavePrint = document.getElementById('btn-action-save-print');
+            if (btnSavePrint && !btnSavePrint.disabled && (!rapidPanel || rapidPanel.style.display === 'none')) {
+                btnSavePrint.click();
+            }
+        }
+    });
+
+    function cleanupAfterSuccess(targetView = null) {
         savedOrderIdForRetry = null;
         if (currentOrderConfig && currentOrderConfig.phone) {
             try {
@@ -604,14 +739,47 @@ document.addEventListener('DOMContentLoaded', () => {
         const actionBar = document.getElementById('incoming-create-order-btn');
         if (actionBar) actionBar.style.display = 'none';
 
-        window.clearWorkspace();
+        if (targetView && targetView !== 'workspace') {
+            window.clearWorkspace();
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            const targetViewEl = document.getElementById(targetView);
+            if (targetViewEl) targetViewEl.classList.add('active');
+            
+            const targetBtn = document.querySelector(`.nav-btn[data-target="${targetView}"]`);
+            if (targetBtn) targetBtn.click();
+        }
+    }
 
-        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-        const targetViewEl = document.getElementById(targetView);
-        if (targetViewEl) targetViewEl.classList.add('active');
-        
-        const targetBtn = document.querySelector(`.nav-btn[data-target="${targetView}"]`);
-        if (targetBtn) targetBtn.click();
+    function validateOrderBeforeAction() {
+        const files = (typeof currentOrderFiles !== 'undefined' && currentOrderFiles) || (typeof window.currentOrderFiles !== 'undefined' && window.currentOrderFiles) || [];
+        const banner = document.getElementById('comp-status-banner');
+        const spinner = document.getElementById('comp-banner-spinner');
+        const bannerText = document.getElementById('comp-banner-text');
+
+        if (!files || files.length === 0) {
+            if (banner && bannerText) {
+                banner.style.display = 'flex';
+                banner.className = 'comp-status-banner error';
+                if (spinner) spinner.style.display = 'none';
+                bannerText.textContent = 'Please add at least one document or image file before creating order.';
+            }
+            if (window.showToast) window.showToast('Please add at least one file first', 'error');
+            return false;
+        }
+
+        const phoneInput = document.getElementById('setup-phone');
+        const nameInput = document.getElementById('setup-name');
+        const phone = phoneInput ? phoneInput.value.trim() : '';
+        const name = nameInput ? nameInput.value.trim() : '';
+
+        // Seamless walk-in fallback if customer fields are left blank
+        if (!phone && !name) {
+            if (nameInput) nameInput.value = 'Walk-in Customer';
+            const bn = document.getElementById('billing-customer-name');
+            if (bn) bn.textContent = 'Walk-in Customer';
+        }
+
+        return true;
     }
 
     const btnActionSaveOnly = document.getElementById('btn-action-save-only');
@@ -646,7 +814,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (window.showToast) window.showToast('Order saved to database successfully!', 'success');
 
                     if (window.refreshAllWorkspaces) window.refreshAllWorkspaces();
-                    cleanupAfterSuccess('history');
+                    
+                    const price = window.currentOrderConfigGlobal?.calculatedPrice || 0;
+                    window.showOrderSuccessRapidPanel(res.orderId, price);
                 } else {
                     throw new Error(res ? res.error : 'Order save failed');
                 }
@@ -697,6 +867,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const printResult = await executePrint();
 
                 if (printResult && printResult.success) {
+                    const finalizedOrderId = savedOrderIdForRetry;
                     savedOrderIdForRetry = null;
                     if (banner && bannerText) {
                         banner.className = 'comp-status-banner success';
@@ -706,7 +877,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (window.showToast) window.showToast('Order saved to database & print job queued!', 'success');
 
                     if (window.refreshAllWorkspaces) window.refreshAllWorkspaces();
-                    cleanupAfterSuccess();
+                    
+                    const price = window.currentOrderConfigGlobal?.calculatedPrice || 0;
+                    window.showOrderSuccessRapidPanel(finalizedOrderId, price);
                 } else {
                     const err = printResult ? printResult.error : 'Printer offline or failed to respond';
                     if (banner && bannerText) {

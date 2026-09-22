@@ -106,14 +106,15 @@
     }
 
     async function loadPrintersDropdown() {
-        if (!window.api || !window.api.getPrinters) return;
         try {
+            if (!window.api || !window.api.getPrinters) return;
             const printers = await window.api.getPrinters();
-            availablePrintersList = printers || [];
             const filterPrinter = document.getElementById('ps-filter-printer');
+            const printerList = Array.isArray(printers) ? printers : [];
+            availablePrintersList = printerList;
             if (filterPrinter) {
                 let html = '<option value="All">All Printers</option>';
-                printers.forEach(p => {
+                printerList.forEach(p => {
                     const name = p.name || p.display_name;
                     html += `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`;
                 });
@@ -138,23 +139,26 @@
         } else if (view === 'week') {
             const dayOfWeek = start.getDay(); // 0 is Sunday
             const diffToMonday = start.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1); 
-            const weekStart = new Date(now.getFullYear(), now.getMonth(), diffToMonday, 0, 0, 0);
-            const weekEnd = new Date(weekStart);
-            weekEnd.setDate(weekEnd.getDate() + 6);
-            weekEnd.setHours(23, 59, 59);
-            return { dateStart: weekStart.toISOString(), dateEnd: weekEnd.toISOString() };
+            const monday = new Date(start);
+            monday.setDate(diffToMonday);
+            monday.setHours(0, 0, 0, 0);
+
+            const sunday = new Date(monday);
+            sunday.setDate(monday.getDate() + 6);
+            sunday.setHours(23, 59, 59, 999);
+
+            return { dateStart: monday.toISOString(), dateEnd: sunday.toISOString() };
         } else if (view === 'month' || view === 'heatmap') {
-            const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
-            const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-            return { dateStart: monthStart.toISOString(), dateEnd: monthEnd.toISOString() };
+            const firstDay = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+            const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+            return { dateStart: firstDay.toISOString(), dateEnd: lastDay.toISOString() };
         }
-        return {};
+        return { dateStart: null, dateEnd: null };
     }
 
     async function loadProductionJobs() {
-        if (!window.api || !window.api.productionGetJobs) return;
-
         try {
+            if (!window.api || !window.api.productionGetJobs) return;
             const dateRange = getDateRangeForView(activeCalView);
             const filters = {
                 status: statusFilter,
@@ -164,7 +168,7 @@
             };
 
             const jobs = await window.api.productionGetJobs(filters, searchQuery);
-            let filtered = jobs || [];
+            let filtered = Array.isArray(jobs) ? [...jobs] : [];
 
             // Apply additional local filters (paper & printType) if set
             if (paperFilter !== 'All') {
