@@ -19,6 +19,13 @@
 </head>
 <body>
     <h1>DeskSolutions Cloud Control Center</h1>
+    
+    <div class="card">
+        <h2>Enrollment</h2>
+        <button onclick="generateKey()">Generate Enrollment Key</button>
+        <div id="key-display" style="margin-top: 10px; font-size: 1.2em; font-family: monospace; color: #10b981;"></div>
+    </div>
+    
     <div class="card">
         <h2>Active Shops</h2>
         <table>
@@ -90,6 +97,16 @@
                 body: JSON.stringify({ shopId, command })
             });
             alert('Command sent');
+        }
+
+        async function generateKey() {
+            const res = await fetch('/api/admin/keys', { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                document.getElementById('key-display').innerText = `Generated Key: ${data.key} (Valid for 24h)`;
+            } else {
+                alert('Failed to generate key');
+            }
         }
 
         fetchShops();

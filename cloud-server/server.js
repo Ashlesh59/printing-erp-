@@ -56,16 +56,63 @@ db.exec(`
         filePath TEXT,
         timestamp INTEGER
     );
+    CREATE TABLE IF NOT EXISTS enrollment_keys (
+        key TEXT PRIMARY KEY,
+        used INTEGER DEFAULT 0,
+        shopId TEXT,
+        createdAt INTEGER,
+        expiresAt INTEGER
+    );
 `);
 
 // API Endpoints
 
+app.post('/api/admin/keys', (req, res) => {
+    // Generate a 12-character alphanumeric enrollment key
+    const key = crypto.randomBytes(6).toString('hex').toUpperCase();
+    const createdAt = Date.now();
+    const expiresAt = createdAt + 24 * 60 * 60 * 1000; // 24 hours
+    
+    db.prepare('INSERT INTO enrollment_keys (key, createdAt, expiresAt) VALUES (?, ?, ?)')
+      .run(key, createdAt, expiresAt);
+      
+    res.json({ success: true, key, expiresAt });
+});
+
+app.post('/api/enroll', (req, res) => {
+    const { key, name } = req.body;
+    if (!key) return res.status(400).json({ success: false, message: 'Enrollment key required' });
+
+    db.transaction(() => {
+        const row = db.prepare('SELECT * FROM enrollment_keys WHERE key = ?').get(key);
+        if (!row) {
+            return res.status(404).json({ success: false, message: 'Invalid enrollment key' });
+        }
+        if (row.used) {
+            return res.status(403).json({ success: false, message: 'Key already used' });
+        }
+        if (Date.now() > row.expiresAt) {
+            return res.status(403).json({ success: false, message: 'Key expired' });
+        }
+
+        const shopId = crypto.randomUUID().split('-')[0].toUpperCase();
+        const token = crypto.randomBytes(32).toString('hex');
+        const shopName = name || 'New Enrolled Shop';
+
+        // Mark key as used
+        db.prepare('UPDATE enrollment_keys SET used = 1, shopId = ? WHERE key = ?').run(shopId, key);
+
+        // Register shop
+        db.prepare('INSERT INTO shops (shopId, name, registeredAt, status, token) VALUES (?, ?, ?, ?, ?)')
+          .run(shopId, shopName, Date.now(), 'active', token);
+
+        res.json({ success: true, shopId, token });
+    })();
+});
+
 app.post('/api/register', (req, res) => {
-    const shopId = crypto.randomUUID().split('-')[0].toUpperCase();
-    const name = req.body.name || 'Unknown Shop';
-    const stmt = db.prepare('INSERT INTO shops (shopId, name, registeredAt) VALUES (?, ?, ?)');
-    stmt.run(shopId, name, Date.now());
-    res.json({ success: true, shopId });
+    // Deprecated for direct use, use /api/enroll instead
+    res.status(403).json({ success: false, message: 'Use /api/enroll with a valid key' });
 });
 
 app.get('/api/health', (req, res) => {
@@ -184,16 +231,16 @@ wss.on('connection', (ws, req) => {
             const { type, shopId, token } = data;
 
             if (type === 'auth') {
-                // Auto-enroll for test if not exists
-                let shop = db.prepare('SELECT * FROM shops WHERE shopId = ?').get(shopId);
+                const shop = db.prepare('SELECT * FROM shops WHERE shopId = ?').get(shopId);
+                
                 if (!shop) {
-                    db.prepare('INSERT INTO shops (shopId, name, registeredAt, status, token) VALUES (?, ?, ?, ?, ?)')
-                      .run(shopId, 'Auto-enrolled Shop', Date.now(), 'active', token || 'default-token');
-                    shop = db.prepare('SELECT * FROM shops WHERE shopId = ?').get(shopId);
+                    ws.send(JSON.stringify({ type: 'auth_failed', reason: 'Shop not enrolled' }));
+                    ws.close();
+                    return;
                 }
 
                 // Check Revocation and Token
-                if (shop.status === 'revoked' || (shop.token && shop.token !== token)) {
+                if (shop.status === 'revoked' || shop.token !== token) {
                     ws.send(JSON.stringify({ type: 'auth_failed', reason: 'Unauthorized or revoked' }));
                     ws.close();
                     return;

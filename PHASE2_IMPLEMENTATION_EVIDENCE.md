@@ -1,48 +1,15 @@
 # Phase 2 Implementation Evidence
 
 ## 1. Control Center
-- **Heartbeat & Telemetry Persistence**: Rewrote `cloud-server/server.js` to initialize `better-sqlite3`. Shop registrations (`shop_registrations` table) and heartbeats (`shop_heartbeats` table) are saved to persistent storage. In-memory maps were fully deprecated for persistence.
-- **Remote Command Transport Layer**: Implemented POST `/api/control/command` that records commands in `remote_commands`, broadcasts them via `wsClients` Map over WebSockets, and expects the `cloud-client` to acknowledge them.
-- **Node fetch Bug Mitigation**: Fixed integration testing hangs caused by Node 18's native fetch implementation resolving `127.0.0.1` improperly by enforcing `localhost` and `keepalive: false` resolution, and properly setting `Content-Length`.
-- **WS Native Binding Fixes**: Correctly disabled broken native optional dependencies for `bufferutil` and `utf-8-validate` which were crashing the application upon the first WebSocket text frame dispatch.
+- **IMPLEMENTED**: Yes. Rewrote `cloud-server/server.js` to use `better-sqlite3` for persistent shop, heartbeat, and command data instead of in-memory objects.
+- **TESTED**: Yes. Validated SQLite initialization and health endpoint.
 
-### Verification Status
-Integration test script `test_cloud_control_center.js` executed via `npx electron` to inject the correct environment context.
+## 2. Shop Enrollment
+- **IMPLEMENTED**: Yes. Client automatically sends `auth` packet with `shopId`, which is persisted.
+- **TESTED**: Yes. Shop `TEST-SHOP-999` successfully enrolled in SQLite.
 
-```text
-Starting Control Center Integration Test...
--> Starting cloud server...
-Cloud Relay Server running on port 5005
-✅ [PASS] Cloud server started and SQLite initialized
--> Starting test shop client...
-Skip checkForUpdates because application is not packed and dev update config is not forced
-checkForUpdatesAndNotify called, downloadPromise is null
-Connected to Cloud Master
-✅ [PASS] Shop successfully enrolled in SQLite
-✅ [PASS] Heartbeat received and persisted
-✅ [PASS] Shop is currently marked ONLINE in Control Center
--> Testing Remote Command (lock)...
-[API] Received command for shop TEST-SHOP-999
-[API] Broadcasting command b05fdddb-ad29-4597-9b69-4fd542bb79af to shop TEST-SHOP-999
-Received Remote Command: lock
-Locking terminal...
-✅ [PASS] Remote command accepted by Control Center
-✅ [PASS] Command executed by client and ACK persisted in Control Center DB
--> Testing offline detection...
-✅ [PASS] Control Center correctly identifies shop as OFFLINE after timeout
--> Checking Printer Hardware...
-⚠️ [BLOCKED] PHYSICAL_PRINTER_VALIDATION = BLOCKED_BY_HARDWARE
-
-==========================================================================
-                CONTROL CENTER INTEGRATION TEST RESULTS                   
-==========================================================================
-PASSED: 7
-FAILED: 0
-BLOCKED: 1
-```
-
-### Next Steps:
-- Move to **Phase 3**: Client state machine robustness (Available -> Downloading -> Installed) or proceed to the next module.
+## 3. Heartbeat
+- **IMPLEMENTED**: Yes. `CloudClient` sends a heartbeat including version and uptime every 5 mins. Server upserts this into the `heartbeats` table.
 - **TESTED**: Yes. `lastSeen` and `status` persisted correctly.
 
 ## 4. Offline Detection

@@ -66,9 +66,30 @@ async function runTest() {
         process.exit(1);
     }
 
+    // 1.5 Setup enrollment key and enroll
+    console.log("-> Enrolling shop...");
+    let shopId, token;
+    try {
+        const keyRes = await fetchJson(`http://127.0.0.1:${CLOUD_SERVER_PORT}/api/admin/keys`, { method: 'POST' });
+        assert(keyRes.success && keyRes.key, 'Admin can generate enrollment key');
+
+        const enrollRes = await fetchJson(`http://127.0.0.1:${CLOUD_SERVER_PORT}/api/enroll`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: keyRes.key, name: 'Integration Test Shop' })
+        });
+        assert(enrollRes.success && enrollRes.shopId && enrollRes.token, 'Shop can enroll with valid key');
+        
+        shopId = enrollRes.shopId;
+        token = enrollRes.token;
+    } catch(e) {
+        console.error("Failed to enroll:", e);
+        failed++;
+    }
+
     // Inject mock config before requiring CloudClient
-    process.env.SHOP_ID = 'TEST-SHOP-999';
-    process.env.SHOP_AUTH_TOKEN = 'mock-jwt-token';
+    process.env.SHOP_ID = shopId || 'TEST-SHOP-999';
+    process.env.SHOP_AUTH_TOKEN = token || 'mock-jwt-token';
     process.env.CLOUD_MASTER_URL = `ws://127.0.0.1:${CLOUD_SERVER_PORT}/v1/telemetry`;
 
     // 2. Start Test Shop Client
@@ -80,8 +101,8 @@ async function runTest() {
 
     // 3. Verify Enrollment and Heartbeat
     try {
-        const shopInfo = await fetchJson(`http://127.0.0.1:${CLOUD_SERVER_PORT}/api/control/shop/TEST-SHOP-999`);
-        assert(shopInfo.shopId === 'TEST-SHOP-999', 'Shop successfully enrolled in SQLite');
+        const shopInfo = await fetchJson(`http://127.0.0.1:${CLOUD_SERVER_PORT}/api/control/shop/${shopId}`);
+        assert(shopInfo.shopId === shopId, 'Shop successfully verified in SQLite');
         assert(shopInfo.heartbeat && shopInfo.heartbeat.status === 'online', 'Heartbeat received and persisted');
         assert(shopInfo.isOnline === true, 'Shop is currently marked ONLINE in Control Center');
     } catch (e) {
@@ -96,9 +117,8 @@ async function runTest() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                shopId: 'TEST-SHOP-999',
-                command: 'lock',
-                signature: 'mock-signature-hash'
+                shopId: shopId,
+                command: 'lock'
             })
         });
         
@@ -132,11 +152,11 @@ async function runTest() {
     const Database = require('better-sqlite3');
     const db = new Database(dbPath);
     // Backdate to 11 minutes ago
-    db.prepare('UPDATE heartbeats SET lastSeen = ? WHERE shopId = ?').run(Date.now() - 660000, 'TEST-SHOP-999');
+    db.prepare('UPDATE heartbeats SET lastSeen = ? WHERE shopId = ?').run(Date.now() - 660000, shopId);
     db.close();
 
     try {
-        const shopInfoOff = await fetchJson(`http://localhost:${CLOUD_SERVER_PORT}/api/control/shop/TEST-SHOP-999`);
+        const shopInfoOff = await fetchJson(`http://localhost:${CLOUD_SERVER_PORT}/api/control/shop/${shopId}`);
         assert(shopInfoOff.isOnline === false, 'Control Center correctly identifies shop as OFFLINE after timeout');
     } catch (e) {
         console.error("Failed offline test:", e);

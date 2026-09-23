@@ -997,6 +997,31 @@ function createWindow() {
       }
     });
 
+    // ==========================================
+    // CLOUD & CONTROL CENTER IPC HANDLERS
+    // ==========================================
+    const CloudClient = require('./cloud-client');
+
+    registerGuardedHandler('cloud:enroll', ROLES.ADMIN, async (e, key, shopName, serverUrl) => {
+      return await CloudClient.enroll(key, shopName, serverUrl);
+    });
+
+    registerGuardedHandler('cloud:status', ROLES.PUBLIC, () => {
+      return {
+        enrolled: CloudClient.shopId !== 'UNCONFIGURED-SHOP',
+        shopId: CloudClient.shopId,
+        connected: CloudClient.ws && CloudClient.ws.readyState === WebSocket.OPEN,
+        server: CloudClient.cloudUrl,
+        reconnectAttempts: CloudClient.reconnectAttempts
+      };
+    });
+
+    registerGuardedHandler('cloud:reconnect', ROLES.ADMIN, () => {
+      if (CloudClient.ws) CloudClient.ws.close();
+      CloudClient.connect();
+      return { success: true };
+    });
+
     registerGuardedHandler('show-save-dialog', ROLES.OPERATOR, async (e, defaultName) => {
       const { dialog } = require('electron');
       const win = BrowserWindow.fromWebContents(e.sender);

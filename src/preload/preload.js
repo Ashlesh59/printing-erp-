@@ -286,5 +286,10 @@ contextBridge.exposeInMainWorld('api', {
   getPrintDiagnostics: () => ipcRenderer.invoke('printers:get-diagnostics'),
   runTestPrint: (printerName) => ipcRenderer.invoke('printers:test-print', { printerName }),
   getPrintQueueStatus: () => ipcRenderer.invoke('printers:get-queue-status'),
-  cancelPrintJob: (jobId, reason) => ipcRenderer.invoke('printers:cancel-job', { jobId, reason })
+  cancelPrintJob: (jobId, reason) => ipcRenderer.invoke('printers:cancel-job', { jobId, reason }),
+
+  // Cloud & Control Center
+  cloudEnroll: (key, shopName, serverUrl) => ipcRenderer.invoke('cloud:enroll', key, shopName, serverUrl),
+  cloudStatus: () => ipcRenderer.invoke('cloud:status'),
+  cloudReconnect: () => ipcRenderer.invoke('cloud:reconnect')
 });

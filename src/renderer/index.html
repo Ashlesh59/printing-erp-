@@ -632,16 +632,8 @@
         <!-- Main Content Area -->
         <main class="main-content">
             <!-- Header -->
-            <header class="top-bar" style="display: flex; justify-content: space-between; align-items: center; padding: 0 24px;">
-                <div class="header-left" style="display: flex; flex-direction: column; justify-content: center;">
-                    <h1 id="dash-greeting-heading" style="margin: 0; font-size: 1.1rem; color: var(--text-primary); line-height: 1.2;">Good morning, Operator</h1>
-                    <p id="dash-live-date" style="margin: 0; font-size: 0.8rem; color: var(--text-secondary);"></p>
-                </div>
+            <header class="top-bar" style="display: flex; justify-content: flex-end; align-items: center; padding: 12px 24px; height: 56px; box-sizing: border-box;">
                 <div class="user-info" style="display: flex; gap: 16px; align-items: center;">
-                    <button id="dash-reload-btn" class="header-action-btn-reload" style="padding: 8px 14px; font-size: 0.82rem; font-weight: 700; border-radius: 8px !important; display: flex; align-items: center; gap: 6px;">
-                        <span class="reload-icon">🔄</span>
-                        <span>Reload</span>
-                    </button>
                     <!-- Global reload btn kept for safety if other views use it -->
                     <button id="global-reload-btn" style="display: none;"></button>
                     
@@ -658,6 +650,17 @@
             <div id="views-container">
                 <!-- Dashboard View -->
                 <section id="dashboard" class="view erp-dashboard">
+                    <!-- DASHBOARD-ONLY GREETING -->
+                    <div class="dash-greeting-container" style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 24px;">
+                        <div>
+                            <h1 id="dash-greeting-heading" style="margin: 0 0 4px 0; font-size: 1.5rem; font-weight: 700; color: var(--text-primary); line-height: 1.2;">Good morning, Operator</h1>
+                            <p id="dash-live-date" style="margin: 0; font-size: 0.85rem; color: var(--text-secondary);"></p>
+                        </div>
+                        <button id="dash-reload-btn" class="header-action-btn-reload" style="padding: 8px 14px; font-size: 0.82rem; font-weight: 700; border-radius: 8px !important; display: flex; align-items: center; gap: 6px; cursor: pointer; border: 1px solid var(--border-color); background: var(--surface);">
+                            <span class="reload-icon">🔄</span>
+                            <span>Reload</span>
+                        </button>
+                    </div>
 
                     <!-- Compact Notification Strip -->
                     <div id="dash-scheduled-notification-banner" class="erp-notification-strip" style="display: none;">

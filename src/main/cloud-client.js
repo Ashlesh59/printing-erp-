@@ -2,17 +2,76 @@ const WebSocket = require('ws');
 const Sentry = require('@sentry/electron/main');
 const { app } = require('electron');
 
+const fs = require('fs');
+const path = require('path');
+
 class CloudClient {
     constructor() {
-        // Remove hardcoded values; use environment or configuration
-        this.shopId = process.env.SHOP_ID || 'UNCONFIGURED-SHOP'; 
+        this.configPath = app ? path.join(app.getPath('userData'), 'cloud-config.json') : path.join(__dirname, 'cloud-config.json');
+        this.loadConfig();
+        
         this.ws = null;
         this.cloudUrl = process.env.CLOUD_MASTER_URL || 'wss://api.printshopmanager.com/v1/telemetry';
         this.version = app ? app.getVersion() : '1.0.0';
         this.sentryDsn = process.env.SENTRY_DSN || null;
         this.reconnectAttempts = 0;
         this.maxReconnectDelay = 300000; // 5 mins max backoff
-        this.authToken = process.env.SHOP_AUTH_TOKEN || null;
+    }
+
+    loadConfig() {
+        try {
+            if (fs.existsSync(this.configPath)) {
+                const data = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
+                this.shopId = data.shopId || process.env.SHOP_ID || 'UNCONFIGURED-SHOP';
+                this.authToken = data.authToken || process.env.SHOP_AUTH_TOKEN || null;
+            } else {
+                this.shopId = process.env.SHOP_ID || 'UNCONFIGURED-SHOP';
+                this.authToken = process.env.SHOP_AUTH_TOKEN || null;
+            }
+        } catch (e) {
+            console.error('Failed to load cloud config:', e);
+            this.shopId = 'UNCONFIGURED-SHOP';
+            this.authToken = null;
+        }
+    }
+
+    saveConfig(shopId, authToken) {
+        this.shopId = shopId;
+        this.authToken = authToken;
+        try {
+            fs.writeFileSync(this.configPath, JSON.stringify({ shopId, authToken }), 'utf8');
+        } catch (e) {
+            console.error('Failed to save cloud config:', e);
+        }
+    }
+
+    async enroll(key, shopName, serverUrl) {
+        try {
+            const url = (serverUrl || 'http://127.0.0.1:5005').replace(/\/$/, '') + '/api/enroll';
+            const fetch = require('node-fetch'); // Electron may have global fetch, but we can rely on node-fetch or native fetch. If node 18+, global fetch exists. Let's use global fetch.
+            
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key, name: shopName })
+            });
+
+            const data = await response.json();
+            if (!data.success) {
+                return { success: false, error: data.message };
+            }
+
+            this.saveConfig(data.shopId, data.token);
+            
+            // Reconnect WebSocket with new credentials
+            if (this.ws) this.ws.close();
+            this.connect();
+
+            return { success: true, shopId: data.shopId };
+        } catch (error) {
+            console.error('Enrollment failed:', error);
+            return { success: false, error: error.message };
+        }
     }
 
     init() {
