@@ -6,6 +6,7 @@
     <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';">
     <title>DeskSolutions ERP</title>
     <link rel="stylesheet" href="./css/styles.css">
+    <link rel="stylesheet" href="./css/erp-dashboard.css">
     <link rel="stylesheet" href="./css/inventory.css">
     <link rel="stylesheet" href="./css/doc-workspace.css">
     <link rel="stylesheet" href="./css/customer-workspace.css">
@@ -631,206 +632,167 @@
         <!-- Main Content Area -->
         <main class="main-content">
             <!-- Header -->
-            <header class="top-bar">
-                <div class="user-info" style="display: flex; gap: 16px; align-items: center; margin-left: auto;">
-                    <button id="global-reload-btn" class="header-action-btn-reload" style="padding: 8px 14px; font-size: 0.82rem; font-weight: 700; border-radius: 8px !important;">
+            <header class="top-bar" style="display: flex; justify-content: space-between; align-items: center; padding: 0 24px;">
+                <div class="header-left" style="display: flex; flex-direction: column; justify-content: center;">
+                    <h1 id="dash-greeting-heading" style="margin: 0; font-size: 1.1rem; color: var(--text-primary); line-height: 1.2;">Good morning, Operator</h1>
+                    <p id="dash-live-date" style="margin: 0; font-size: 0.8rem; color: var(--text-secondary);"></p>
+                </div>
+                <div class="user-info" style="display: flex; gap: 16px; align-items: center;">
+                    <button id="dash-reload-btn" class="header-action-btn-reload" style="padding: 8px 14px; font-size: 0.82rem; font-weight: 700; border-radius: 8px !important; display: flex; align-items: center; gap: 6px;">
                         <span class="reload-icon">🔄</span>
                         <span>Reload</span>
                     </button>
-                    <span id="header-user-role" style="font-weight: 600; color: var(--text-primary);">Operator</span>
+                    <!-- Global reload btn kept for safety if other views use it -->
+                    <button id="global-reload-btn" style="display: none;"></button>
+                    
+                    <span id="header-user-role" style="display: none;"></span>
+                    <div style="display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,0.05); padding: 4px 12px 4px 4px; border-radius: 20px;">
+                        <span style="background: var(--text-primary); color: var(--bg-color); width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 0.75rem; font-weight: bold;">O</span>
+                        <span id="dash-user-role" style="font-weight: 600; color: var(--text-primary); font-size: 0.85rem;">Operator</span>
+                    </div>
+                    <button id="shop-exit-btn" style="padding: 6px 14px; font-size: 0.8rem; font-weight: 600; background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer;">Exit Roles</button>
                 </div>
             </header>
 
             <!-- Views -->
             <div id="views-container">
                 <!-- Dashboard View -->
-                <section id="dashboard" class="view luxury-dashboard">
-                    <div class="lux-header">
-                        <div class="lux-header-left">
-                            <div class="lux-greeting">
-                                <h1 id="dash-greeting-heading">Good morning, Operator</h1>
-                                <p class="text-muted" id="dash-live-date"></p>
-                            </div>
+                <section id="dashboard" class="view erp-dashboard">
+
+                    <!-- Compact Notification Strip -->
+                    <div id="dash-scheduled-notification-banner" class="erp-notification-strip" style="display: none;">
+                        <span class="erp-notif-icon">📅</span>
+                        <div class="erp-notif-content">
+                            <strong id="dash-banner-title">Scheduled Prints</strong>
+                            <span id="dash-banner-sub">Orders lined up for today</span>
                         </div>
-                        <div class="lux-header-actions">
-                            <div class="lux-icon-btn" id="dash-reload-btn" title="Reload"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></div>
-                            <div class="lux-profile">
-                                <div class="lux-profile-avatar">O</div>
-                                <span id="dash-user-role">Operator</span>
-                            </div>
-                            <button class="lux-btn-outline" id="shop-exit-btn">
-                                Exit Roles
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <!-- Today's Scheduled Prints Notification Banner -->
-                    <div id="dash-scheduled-notification-banner" style="display: none; background: linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(139, 92, 246, 0.15) 100%); border: 1px solid rgba(99, 102, 241, 0.35); border-radius: 12px; padding: 14px 20px; margin-bottom: 20px; align-items: center; justify-content: space-between; gap: 16px; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.08);">
-                        <div style="display: flex; align-items: center; gap: 12px;">
-                            <span style="font-size: 1.5rem; background: rgba(99, 102, 241, 0.2); padding: 8px; border-radius: 10px; display: inline-flex;">📅</span>
-                            <div>
-                                <h4 id="dash-banner-title" style="margin: 0; font-size: 0.98rem; font-weight: 800; color: var(--text-primary);">Today's Scheduled Prints</h4>
-                                <p id="dash-banner-sub" style="margin: 2px 0 0 0; font-size: 0.84rem; color: var(--text-secondary);">You have scheduled orders lined up for production today.</p>
-                            </div>
-                        </div>
-                        <button class="nav-redirect" data-target="production" style="background: var(--lux-primary, #6366f1); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-weight: 700; font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; gap: 6px; white-space: nowrap;">
-                            View Queue →
-                        </button>
+                        <button class="erp-btn-outline nav-redirect" data-target="production">View Queue</button>
                     </div>
 
-                    <!-- Quick Actions -->
-                    <div class="lux-quick-actions">
-                        <button class="nav-redirect primary-action" data-target="workspace" style="background: var(--lux-primary); color: white; border: none;">
-                            <svg class="qa-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-                            New Order
+                    <!-- Action Bar -->
+                    <div class="erp-action-bar">
+                        <button class="erp-btn-primary nav-redirect" data-target="workspace">New Order</button>
+                        <button class="erp-btn-secondary nav-redirect" data-target="incoming" id="dash-box-incoming">
+                            Incoming Orders <span id="dash-inbox-badge" class="erp-badge" style="display: none;">0</span>
                         </button>
-                        <button class="nav-redirect" data-target="incoming" id="dash-box-incoming">
-                            <svg class="qa-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-                            Incoming Orders
-                            <span id="dash-inbox-badge" style="background: var(--lux-primary); color: white; border-radius: 6px; padding: 1px 7px; font-size: 0.72rem; font-weight: 700; margin-left: 4px; display: none;">0</span>
-                        </button>
-                        <button class="nav-redirect" data-target="production">
-                            <svg class="qa-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
-                            Schedule Print
-                        </button>
-                        <button class="nav-redirect" data-target="doc-studio">
-                            <svg class="qa-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-                            Doc Studio
-                        </button>
-                        <button class="nav-redirect" data-target="settings">
-                            <svg class="qa-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-                            Settings
-                        </button>
+                        <button class="erp-btn-secondary nav-redirect" data-target="production">Schedule Print</button>
+                        <button class="erp-btn-secondary nav-redirect" data-target="doc-studio">Doc Studio</button>
+                        <button class="erp-btn-secondary nav-redirect" data-target="settings">Settings</button>
                     </div>
 
-                    <!-- Main Content Grid -->
-                    <div class="lux-dashboard-grid">
-                        
-                        <!-- Top Row (3 Widgets) -->
-                        <div class="lux-panel lux-panel-4">
-                            <div class="lux-panel-header">
-                                <h2>Order Status</h2>
-                            </div>
-                            <div class="lux-big-stat" style="flex: 1; display: flex; flex-direction: column; padding: 16px;">
-                                <!-- Top section: Chart and Legend -->
-                                <div style="display: flex; gap: 24px; align-items: center; justify-content: space-between; flex: 1;">
-                                    
-                                    <!-- Doughnut Chart Container -->
-                                    <div style="position: relative; width: 100px; height: 100px; flex-shrink: 0;">
-                                        <div id="dash-doughnut-chart" style="width: 100%; height: 100%; border-radius: 50%; background: conic-gradient(#e5e7eb 100%);"></div>
-                                        <!-- Inner circle to make it a doughnut -->
-                                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 70%; height: 70%; background: var(--card-bg, white); border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-                                            <span style="font-size: 0.55rem; color: var(--text-secondary); font-weight: 600; text-transform: uppercase;">Today's Orders</span>
-                                            <span id="dash-orders-today" style="font-size: 1.3rem; font-weight: 800; color: var(--text-primary); line-height: 1.1; margin-top: 2px;">0</span>
-                                        </div>
-                                    </div>
+                    <!-- Main Composition -->
+                    <div class="erp-layout">
+                        <!-- KPI Strip (Replaces Doughnut Card) -->
+                        <div class="erp-kpi-strip">
+                            <!-- Hidden chart to prevent JS errors -->
+                            <div id="dash-doughnut-chart" style="display: none;"></div>
                             
-                                    <!-- Legend Container -->
-                                    <div style="flex: 1; display: flex; flex-direction: column; gap: 8px; justify-content: center;">
-                                        <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;">
-                                            <span style="display: flex; align-items: center; gap: 6px; color: var(--text-primary); font-weight: 500;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #65B981; display: inline-block;"></span>Completed</span>
-                                            <strong id="dash-legend-completed" style="color: var(--text-primary);">0</strong>
-                                        </div>
-                                        <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;">
-                                            <span style="display: flex; align-items: center; gap: 6px; color: var(--text-primary); font-weight: 500;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #B38F6F; display: inline-block;"></span>Pending</span>
-                                            <strong id="dash-legend-pending" style="color: var(--text-primary);">0</strong>
-                                        </div>
-                                        <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;">
-                                            <span style="display: flex; align-items: center; gap: 6px; color: var(--text-primary); font-weight: 500;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #710014; display: inline-block;"></span>Processing</span>
-                                            <strong id="dash-legend-processing" style="color: var(--text-primary);">0</strong>
-                                        </div>
-                                        <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;">
-                                            <span style="display: flex; align-items: center; gap: 6px; color: var(--text-primary); font-weight: 500;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #D85A5A; display: inline-block;"></span>Cancelled</span>
-                                            <strong id="dash-legend-cancelled" style="color: var(--text-primary);">0</strong>
-                                        </div>
+                            <div class="erp-kpi-item">
+                                <span class="kpi-label">Today's Orders</span>
+                                <span class="kpi-value" id="dash-orders-today">0</span>
+                            </div>
+                            <div class="erp-kpi-item">
+                                <span class="kpi-label">Total Volume</span>
+                                <span class="kpi-value" id="dash-bottom-total">0</span>
+                            </div>
+                            <div class="erp-kpi-item">
+                                <span class="kpi-label status-completed">Completed</span>
+                                <span class="kpi-value" id="dash-legend-completed">0</span>
+                            </div>
+                            <div class="erp-kpi-item">
+                                <span class="kpi-label status-processing">Processing</span>
+                                <span class="kpi-value" id="dash-legend-processing">0</span>
+                            </div>
+                            <div class="erp-kpi-item">
+                                <span class="kpi-label status-pending">Pending</span>
+                                <span class="kpi-value" id="dash-legend-pending">0</span>
+                            </div>
+                            <div class="erp-kpi-item">
+                                <span class="kpi-label status-cancelled">Cancelled</span>
+                                <span class="kpi-value" id="dash-legend-cancelled">0</span>
+                            </div>
+                            <div class="erp-kpi-item">
+                                <span class="kpi-label">Avg / Rate</span>
+                                <span class="kpi-value"><span id="dash-bottom-avg">-</span> / <span id="dash-bottom-rate" style="color: var(--primary);">0%</span></span>
+                            </div>
+                        </div>
+
+                        <!-- Main Content Split -->
+                        <div class="erp-main-split">
+                            <!-- Left: Large Production / Workspace Area -->
+                            <div class="erp-workspace-area">
+                                <div class="erp-panel large-panel">
+                                    <div class="erp-panel-header">
+                                        <h2>Recent Activity & Queue</h2>
+                                        <button class="erp-link-btn nav-redirect" data-target="history">View All →</button>
+                                    </div>
+                                    <div class="erp-table-container">
+                                        <table class="erp-data-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>Customer</th>
+                                                    <th>Pages</th>
+                                                    <th>Amount</th>
+                                                    <th>Status</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="dash-recent-orders-tbody">
+                                                <tr><td colspan="4" class="empty-state">No orders yet.</td></tr>
+                                            </tbody>
+                                        </table>
                                     </div>
                                 </div>
                                 
-                                <!-- Bottom Stats -->
-                                <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
-                                    <div style="display: flex; flex-direction: column;">
-                                        <span style="font-size: 0.65rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em;">Today's Total Orders</span>
-                                        <strong id="dash-bottom-total" style="font-size: 1rem; color: var(--text-primary); margin-top: 2px;">0</strong>
+                                <div class="erp-panel">
+                                    <div class="erp-panel-header">
+                                        <h2>Today's Schedule</h2>
+                                        <button class="erp-link-btn nav-redirect" data-target="production">Calendar →</button>
                                     </div>
-                                    <div style="display: flex; flex-direction: column; align-items: center;">
-                                        <span style="font-size: 0.65rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em;">Average Completion</span>
-                                        <strong id="dash-bottom-avg" style="font-size: 1rem; color: var(--text-primary); margin-top: 2px;">-</strong>
-                                    </div>
-                                    <div style="display: flex; flex-direction: column; text-align: right;">
-                                        <span style="font-size: 0.65rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em;">Completion Rate %</span>
-                                        <strong id="dash-bottom-rate" style="font-size: 1rem; color: var(--success-color); margin-top: 2px;">0%</strong>
+                                    <div id="dash-schedule-timeline" class="erp-timeline-container">
+                                        <p class="empty-state">No scheduled jobs for today.</p>
                                     </div>
                                 </div>
                             </div>
-                        </div>
 
-                        <div class="lux-panel lux-panel-4">
-                            <div class="lux-panel-header">
-                                <h2>📅 Today's Schedule</h2>
-                                <button class="lux-link-btn nav-redirect" data-target="production">View Calendar →</button>
-                            </div>
-                            <div id="dash-schedule-timeline" style="display: flex; flex-direction: column; gap: 10px; flex: 1; max-height: 220px; overflow-y: auto; padding-right: 4px;">
-                                <p class="empty-state" style="text-align: center; margin: auto;">No scheduled jobs for today.</p>
-                            </div>
-                        </div>
-
-                        <div class="lux-panel lux-panel-4">
-                            <div class="lux-panel-header">
-                                <h2>Low Stock Alerts</h2>
-                                <button class="lux-link-btn nav-redirect" data-target="inventory">Manage</button>
-                            </div>
-                            <div style="overflow-y: auto; max-height: 200px; flex: 1;">
-                                <table class="data-table">
-                                    <tbody id="inv-alerts-tbody">
-                                        <!-- Dynamically populated -->
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-
-                        <!-- Bottom Row (2 Widgets) -->
-                        <div class="lux-panel lux-panel-8">
-                            <div class="lux-panel-header">
-                                <h2>Recent Orders</h2>
-                                <button class="lux-link-btn nav-redirect" data-target="history">View All History →</button>
-                            </div>
-                            <div style="overflow-x: auto; max-height: 350px; overflow-y: auto;">
-                                <table class="data-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Customer</th>
-                                            <th>Pages</th>
-                                            <th>Amount</th>
-                                            <th>Status</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="dash-recent-orders-tbody">
-                                        <tr><td colspan="4" class="empty-state" style="text-align: center;">No orders yet.</td></tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-
-                        <div class="lux-panel lux-panel-4">
-                            <div class="lux-panel-header">
-                                <h2>Operations Snapshot</h2>
-                            </div>
-                            <div style="display: flex; flex-direction: column; gap: 24px; flex: 1; justify-content: center;">
-                                <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--lux-border); padding-bottom: 12px;">
-                                    <span style="color: var(--lux-text-muted);">Current Mode</span>
-                                    <span style="font-weight: 500;">PrintShop Admin</span>
+                            <!-- Right: Attention & Exceptions -->
+                            <div class="erp-sidebar-area">
+                                <div class="erp-panel attention-panel">
+                                    <div class="erp-panel-header">
+                                        <h2>Attention Items</h2>
+                                    </div>
+                                    <div class="erp-attention-list">
+                                        <div class="attention-section">
+                                            <h3 style="font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--secondary); margin-bottom: 8px;">Low Stock Alerts</h3>
+                                            <table class="erp-data-table compact">
+                                                <tbody id="inv-alerts-tbody">
+                                                    <!-- Alerts injected here -->
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--lux-border); padding-bottom: 12px;">
-                                    <span style="color: var(--lux-text-muted);">Network Status</span>
-                                    <span style="font-weight: 500; color: #10B981;">Online (Local)</span>
-                                </div>
-                                <div style="display: flex; justify-content: space-between;">
-                                    <span style="color: var(--lux-text-muted);">Sync Protocol</span>
-                                    <span style="font-weight: 500;">Ready</span>
+
+                                <div class="erp-panel quiet-panel">
+                                    <div class="erp-panel-header">
+                                        <h2>System Snapshot</h2>
+                                    </div>
+                                    <div class="erp-snapshot-list">
+                                        <div class="snapshot-item">
+                                            <span class="snapshot-label">Mode</span>
+                                            <span class="snapshot-value">PrintShop Admin</span>
+                                        </div>
+                                        <div class="snapshot-item">
+                                            <span class="snapshot-label">Network</span>
+                                            <span class="snapshot-value status-online">Online (Local)</span>
+                                        </div>
+                                        <div class="snapshot-item">
+                                            <span class="snapshot-label">Sync</span>
+                                            <span class="snapshot-value">Ready</span>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
-
                     </div>
                 </section>
 
@@ -869,6 +831,7 @@
                 <!-- ═══════════════════════════════════════════════════════════
                      WORKSPACE — OPERATOR HIGH-VELOCITY ORDER CREATION
                      ═══════════════════════════════════════════════════════════ -->
+                <!-- Dashboard View -->
                 <section id="workspace" class="view ws-view">
 
                     <!-- Top Operator Action Bar -->
@@ -1172,6 +1135,7 @@
                     <span id="inv-extras" style="display:none;"></span>
                     <div id="inv-extras-row" style="display:none;"></div>
                 </section>
+
 
                 <!-- Order History View -->
                 <section id="history" class="view">
@@ -3336,10 +3300,7 @@
                 </section>
             </div>
             
-            <!-- Floating Action Button -->
-            <button class="fab-button nav-redirect" data-target="workspace" id="fab-create-order" title="Create Order">
-                <span style="font-size: 24px; line-height: 1;">+</span>
-            </button>
+            <!-- Removed Floating Action Button per redesign -->
         </main>
     </div>
 
