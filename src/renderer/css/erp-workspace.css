@@ -1,0 +1,403 @@
+/* =========================================
+   ERP PREMIUM WORKSPACE (CREATE ORDER)
+   ========================================= */
+
+.erp-workspace-layout {
+    display: flex;
+    gap: 24px;
+    height: calc(100vh - 120px);
+    background-color: #F7F4EF;
+    padding: 0 24px 24px 24px;
+    box-sizing: border-box;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #1A1A1A;
+}
+
+/* Header */
+.compact-ws-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 24px;
+    background-color: #F7F4EF;
+    border-bottom: 1px solid #E8E2D9;
+}
+
+.ws-badge-brand {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: #B38F6F;
+    letter-spacing: 0.05em;
+    display: block;
+    margin-bottom: 2px;
+}
+
+/* Left Column */
+.erp-workspace-flow {
+    flex: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    overflow-y: auto;
+    padding-right: 8px; /* For scrollbar */
+}
+
+/* Right Column */
+.erp-workspace-summary {
+    flex: 1;
+    min-width: 300px;
+    max-width: 350px;
+}
+
+/* Sections (Cards) */
+.erp-ws-section {
+    background: #FFFFFF;
+    border: 1px solid #E8E2D9;
+    border-radius: 6px;
+    padding: 16px 20px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+}
+
+.erp-ws-sec-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    border-bottom: 1px solid #f4efeb;
+    padding-bottom: 8px;
+}
+
+.erp-ws-sec-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0;
+    color: #1A1A1A;
+}
+
+/* Forms */
+.erp-ws-form-row {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+}
+
+.erp-ws-form-row.align-bottom {
+    align-items: flex-end;
+}
+
+.erp-ws-field {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.erp-ws-field.flex-2 {
+    flex: 2;
+}
+
+.erp-ws-field label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #6E6E6E;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.erp-ws-input, .erp-ws-select {
+    width: 100%;
+    padding: 8px 12px;
+    font-size: 13px;
+    border: 1px solid #D6CDC4;
+    border-radius: 4px;
+    background: #FAFAFA;
+    color: #1A1A1A;
+    box-sizing: border-box;
+    transition: all 0.2s;
+}
+
+.erp-ws-input:focus, .erp-ws-select:focus {
+    outline: none;
+    border-color: #B38F6F;
+    background: #FFFFFF;
+    box-shadow: 0 0 0 2px rgba(179, 143, 111, 0.1);
+}
+
+/* Drag & Drop */
+.erp-ws-dropzone {
+    border: 2px dashed #D6CDC4;
+    border-radius: 6px;
+    background: #FAFAFA;
+    padding: 24px;
+    text-align: center;
+    transition: all 0.2s;
+}
+
+.erp-ws-dropzone:hover, .erp-ws-dropzone.dragover {
+    border-color: #B38F6F;
+    background: #FDFCFB;
+}
+
+/* Copies Stepper */
+.erp-copies-stepper {
+    display: flex;
+    align-items: center;
+    border: 1px solid #D6CDC4;
+    border-radius: 4px;
+    background: #FFFFFF;
+    height: 34px;
+    overflow: hidden;
+}
+
+.erp-copies-stepper button {
+    background: #F5F5F5;
+    border: none;
+    padding: 0 12px;
+    font-weight: 600;
+    font-size: 16px;
+    color: #6E6E6E;
+    cursor: pointer;
+    height: 100%;
+}
+
+.erp-copies-stepper button:hover {
+    background: #EAEAEA;
+    color: #1A1A1A;
+}
+
+.erp-copies-stepper input {
+    width: 60px;
+    border: none;
+    text-align: center;
+    font-size: 14px;
+    font-weight: 600;
+    color: #1A1A1A;
+    background: transparent;
+    outline: none;
+}
+
+/* Advanced Options Details */
+.erp-advanced-box {
+    margin-top: 16px;
+    border-top: 1px solid #f4efeb;
+    padding-top: 12px;
+}
+
+.erp-advanced-summary {
+    font-size: 12px;
+    font-weight: 600;
+    color: #B38F6F;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+}
+
+.erp-advanced-summary::-webkit-details-marker {
+    display: none;
+}
+
+.erp-advanced-content {
+    margin-top: 12px;
+}
+
+/* Live Summary Card */
+.erp-summary-card {
+    background: #FFFFFF;
+    border: 1px solid #E8E2D9;
+    border-radius: 6px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    position: sticky;
+    top: 0;
+}
+
+.erp-summary-header {
+    border-bottom: 1px solid #f4efeb;
+    padding-bottom: 12px;
+    margin-bottom: 16px;
+}
+
+.erp-summary-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #710014;
+    letter-spacing: 0.05em;
+}
+
+.erp-summary-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    font-size: 13px;
+}
+
+.erp-summary-row span {
+    color: #6E6E6E;
+}
+
+.erp-summary-row strong {
+    color: #1A1A1A;
+    font-weight: 600;
+    text-align: right;
+    max-width: 60%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.erp-summary-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 16px 0;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #f4efeb;
+}
+
+.erp-summary-chips span {
+    background: #F7F4EF;
+    border: 1px solid #E8E2D9;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #6E6E6E;
+}
+
+.erp-breakdown-title {
+    font-size: 10px;
+    font-weight: 700;
+    color: #B38F6F;
+    margin-bottom: 8px;
+    letter-spacing: 0.05em;
+}
+
+.erp-grand-total {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 2px solid #E8E2D9;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.erp-gt-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: #1A1A1A;
+}
+
+.erp-gt-amount {
+    font-size: 24px;
+    font-weight: 800;
+    color: #710014;
+}
+
+/* Primary CTA Button */
+.erp-btn-primary-huge {
+    width: 100%;
+    background: #710014;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 6px;
+    padding: 16px;
+    text-align: center;
+    cursor: pointer;
+    margin-top: 24px;
+    box-shadow: 0 4px 12px rgba(113, 0, 20, 0.2);
+    transition: all 0.2s;
+}
+
+.erp-btn-primary-huge:hover {
+    background: #5a0010;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(113, 0, 20, 0.25);
+}
+
+.erp-cta-text {
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    margin-bottom: 4px;
+}
+
+.erp-cta-sub {
+    font-size: 11px;
+    font-weight: 500;
+    opacity: 0.8;
+}
+
+/* Subordinate Actions */
+.erp-secondary-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.erp-btn-sub {
+    flex: 1;
+    background: transparent;
+    border: 1px solid #D6CDC4;
+    color: #6E6E6E;
+    padding: 8px 0;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.erp-btn-sub:hover {
+    border-color: #B38F6F;
+    color: #B38F6F;
+    background: #FDFCFB;
+}
+
+/* Compact Grid inside Product/Paper */
+.erp-compact-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 8px;
+}
+
+.ws-product-card, .ws-paper-card {
+    border: 1px solid #D6CDC4;
+    border-radius: 4px;
+    padding: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    text-align: center;
+    background: #FAFAFA;
+}
+
+.ws-product-card.selected, .ws-paper-card.selected {
+    border-color: #710014;
+    background: #FFF5F7;
+    color: #710014;
+    font-weight: 600;
+}
+
+/* Overrides for generic utility buttons */
+.erp-btn-secondary {
+    background: #FFFFFF;
+    color: #1A1A1A;
+    border: 1px solid #E8E2D9;
+    border-radius: 4px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.erp-btn-secondary:hover {
+    background: #fdfcfb;
+    border-color: #B38F6F;
+}
+
+.erp-btn-outline {
+    background: transparent;
+    border: 1px solid #B38F6F;
+    color: #B38F6F;
+    border-radius: 4px;
+    font-weight: 600;
+    cursor: pointer;
+}

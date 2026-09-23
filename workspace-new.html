@@ -1,0 +1,234 @@
+                <!-- Dashboard View -->
+                <section id="workspace" class="view ws-view">
+
+                    <!-- COMPACT WORKSPACE HEADER -->
+                    <div class="ws-top-bar compact-ws-header">
+                        <div class="ws-top-bar-left">
+                            <span class="ws-badge-brand">COUNTER DESK</span>
+                            <h1 class="ws-page-heading" style="font-size: 20px; font-weight: 700; margin: 0; color: #1A1A1A;">Create Order</h1>
+                            <span class="ws-hint-text" style="font-size: 12px; color: #6E6E6E;">Serve counter customer in seconds</span>
+                        </div>
+                        <div class="ws-top-bar-right" style="display: flex; gap: 8px; align-items: center;">
+                            <button id="btn-quick-walkin" class="erp-btn-secondary" type="button" style="padding: 6px 12px; font-size: 12px;">
+                                Walk-in Customer
+                            </button>
+                            <button id="btn-reset-order" class="erp-btn-outline" type="button" style="padding: 6px 12px; font-size: 12px;">
+                                Reset Form
+                            </button>
+                            <div class="ws-datetime" id="ws-datetime" style="display:none;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Hidden compatibility step bars for legacy scripts -->
+                    <div class="ws-steps-bar" style="display: none;">
+                        <div class="ws-step active" id="wsbar-1"></div>
+                        <div class="ws-step" id="wsbar-2"></div>
+                        <div class="ws-step" id="wsbar-3"></div>
+                    </div>
+
+                    <!-- Main 2-Column Unified Layout -->
+                    <div class="ws-unified-container erp-workspace-layout">
+                        <!-- LEFT COLUMN: The Rapid Order Flow -->
+                        <div class="ws-col-main erp-workspace-flow">
+                            
+                            <!-- 1. CUSTOMER CARD -->
+                            <div class="erp-ws-section">
+                                <div class="erp-ws-sec-header">
+                                    <h3 class="erp-ws-sec-title">1. Customer Information</h3>
+                                    <button class="erp-link-btn" id="btn-view-history" style="display:none;" type="button">View Past Orders</button>
+                                </div>
+                                
+                                <div class="erp-ws-form-row">
+                                    <div class="erp-ws-field">
+                                        <label>Customer Search / Phone <span class="ws-req">*</span></label>
+                                        <input type="text" id="setup-phone" class="erp-ws-input" placeholder="Search customer or phone..." autocomplete="off" autofocus>
+                                        <div id="setup-search-results" class="search-results" style="top:100%;left:0;right:0;"></div>
+                                    </div>
+                                    <div class="erp-ws-field">
+                                        <label>Customer Name <span class="ws-req">*</span></label>
+                                        <input type="text" id="setup-name" class="erp-ws-input" placeholder="Walk-in Customer">
+                                    </div>
+                                    <div class="erp-ws-field">
+                                        <label>GSTIN (Optional)</label>
+                                        <input type="text" id="setup-gstin" class="erp-ws-input" placeholder="15-digit GSTIN..." maxlength="15">
+                                    </div>
+                                </div>
+                                <select id="setup-state" style="display: none;">
+                                    <option value="Local" selected>Local (CGST+SGST)</option>
+                                    <option value="Interstate">Interstate (IGST)</option>
+                                </select>
+                            </div>
+
+                            <!-- 2. PRINT FILES CARD -->
+                            <div class="erp-ws-section">
+                                <div class="erp-ws-sec-header">
+                                    <h3 class="erp-ws-sec-title">2. Print Files</h3>
+                                    <button class="erp-btn-secondary" id="btn-browse-files" type="button" style="padding: 4px 12px; font-size: 12px;">+ Add Files</button>
+                                </div>
+                                <div class="erp-ws-dropzone" id="setup-files-list">
+                                    <div class="erp-ws-drop-hint" id="setup-files-empty">
+                                        <div>Drag &amp; drop files here, or click Add Files</div>
+                                        <div style="font-size:11px; color:#6E6E6E; margin-top:4px;">PDF, JPG, PNG, TIFF supported • Instant page count</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 3. PRINT SETTINGS CARD -->
+                            <div class="erp-ws-section">
+                                <div class="erp-ws-sec-header">
+                                    <h3 class="erp-ws-sec-title">3. Product &amp; Print Configuration</h3>
+                                    <span id="preflight-rec-badge" class="erp-ws-badge-rec" style="display: none;">Recommended Match</span>
+                                </div>
+
+                                <div class="erp-ws-form-row align-bottom">
+                                    <div class="erp-ws-field flex-2">
+                                        <label>Product</label>
+                                        <div id="product-grid-container" class="erp-compact-grid">
+                                            <div class="ws-loading">Loading catalog...</div>
+                                        </div>
+                                    </div>
+                                    <div class="erp-ws-field flex-2">
+                                        <label>Paper / Quality</label>
+                                        <div id="paper-options-container" style="display: none;" class="erp-compact-grid"></div>
+                                    </div>
+                                </div>
+                                
+                                <div class="erp-ws-form-row">
+                                    <!-- Dynamic Specs rendered by ProductConfigManager -->
+                                    <div id="dynamic-job-config-container" class="erp-ws-field flex-2"></div>
+
+                                    <div class="erp-ws-field">
+                                        <label>Copies</label>
+                                        <div class="erp-copies-stepper">
+                                            <button type="button" id="copies-minus">−</button>
+                                            <input type="number" id="setup-copies" value="1" min="1" max="99999">
+                                            <button type="button" id="copies-plus">+</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Progressive Disclosure: Collapsible Advanced Settings -->
+                                <details class="erp-advanced-box" id="ws-advanced-box">
+                                    <summary class="erp-advanced-summary">
+                                        Advanced Options (N-up, Page Range, Doc Studio)
+                                    </summary>
+                                    <div class="erp-advanced-content erp-ws-form-row">
+                                        <div class="erp-ws-field">
+                                            <label>Pages Per Sheet (N-Up)</label>
+                                            <select id="layout-images-per-page" class="erp-ws-input">
+                                                <option value="1" selected>1-Up (Standard)</option>
+                                                <option value="2">2-Up</option>
+                                                <option value="4">4-Up</option>
+                                            </select>
+                                        </div>
+                                        <div class="erp-ws-field">
+                                            <label>Page Range</label>
+                                            <input type="text" id="setup-page-range" class="erp-ws-input" placeholder="e.g. 1-5, 8">
+                                        </div>
+                                        <div class="erp-ws-field" style="justify-content: flex-end;">
+                                            <button type="button" class="erp-btn-outline" id="btn-choice-open-studio" style="padding: 6px 12px; font-size: 12px;">Edit in Doc Studio</button>
+                                        </div>
+                                    </div>
+                                    <div id="extras-container" class="erp-ws-extras-list" style="margin-top: 8px;"></div>
+                                </details>
+                            </div>
+                        </div>
+
+                        <!-- RIGHT COLUMN: Sticky Live Summary & Primary Action -->
+                        <div class="ws-col-summary erp-workspace-summary">
+                            <div class="erp-summary-card">
+                                <div class="erp-summary-header">
+                                    <span class="erp-summary-label">LIVE SUMMARY</span>
+                                </div>
+
+                                <div class="erp-summary-body">
+                                    <div class="erp-summary-row">
+                                        <span>Customer</span>
+                                        <strong id="billing-customer-name">Walk-in Customer</strong>
+                                    </div>
+                                    <div class="erp-summary-row" id="billing-phone-row">
+                                        <span>Phone</span>
+                                        <strong id="billing-customer-phone">—</strong>
+                                    </div>
+                                    <div class="erp-summary-row">
+                                        <span>Files</span>
+                                        <strong id="bill-total-files">0</strong>
+                                    </div>
+                                    <div class="erp-summary-row">
+                                        <span>Pages</span>
+                                        <strong id="bill-printed-pages">0</strong>
+                                    </div>
+                                    
+                                    <div class="erp-summary-chips" id="inv-summary-chips">
+                                        <span id="inv-chip-paper">No paper</span>
+                                        <span id="inv-chip-layout">1-up</span>
+                                        <span id="inv-chip-copies">×1</span>
+                                    </div>
+
+                                    <div class="erp-breakdown">
+                                        <div class="erp-breakdown-title">PRICE BREAKDOWN</div>
+                                        <div id="invoice-table-body" class="erp-breakdown-list">
+                                            <div style="font-size: 11px; color: #6E6E6E;">Pricing not configured</div>
+                                        </div>
+                                    </div>
+
+                                    <div class="erp-grand-total">
+                                        <div class="erp-gt-label">GRAND TOTAL</div>
+                                        <div id="bill-total-cost" class="erp-gt-amount">Pricing not configured</div>
+                                    </div>
+
+                                    <div id="comp-status-banner" class="comp-status-banner" style="display: none;">
+                                        <span id="comp-banner-spinner" style="display: none;">🌀</span>
+                                        <span id="comp-banner-text">Processing...</span>
+                                    </div>
+
+                                    <!-- SINGLE DOMINANT PRIMARY CTA -->
+                                    <div id="ws-primary-cta-container">
+                                        <button id="btn-action-save-print" class="erp-btn-primary-huge" type="button">
+                                            <div class="erp-cta-text">CREATE ORDER</div>
+                                            <div class="erp-cta-sub">Save invoice &amp; dispatch to print</div>
+                                        </button>
+                                        
+                                        <!-- Subordinate Secondary Actions -->
+                                        <div class="erp-secondary-actions">
+                                            <button id="btn-action-save-only" class="erp-btn-sub" type="button" title="Save Only">Save</button>
+                                            <button id="btn-action-schedule" class="erp-btn-sub" type="button" title="Schedule">Schedule</button>
+                                            <button id="btn-action-print-only" class="erp-btn-sub" type="button" title="Print Only">Print</button>
+                                        </div>
+                                    </div>
+
+                                    <!-- POST-ORDER RAPID COMPLETION PANEL -->
+                                    <div id="order-success-rapid-panel" style="display: none; margin-top:16px;">
+                                        <div style="background: #EAF5ED; padding: 12px; border-radius: 6px; border: 1px solid #C4E2CB; margin-bottom: 12px;">
+                                            <h4 id="ws-sp-title" style="margin:0 0 4px 0; color: #15803d; font-size: 14px;">Order Created!</h4>
+                                            <p id="ws-sp-sub" style="margin:0; font-size: 12px; color: #15803d;">Saved to database and invoiced.</p>
+                                        </div>
+                                        <button id="btn-start-next-order" class="erp-btn-primary" style="width: 100%; margin-bottom: 8px;">NEW ORDER (Enter)</button>
+                                        <div style="display: flex; gap: 8px;">
+                                            <button id="btn-sp-reprint" class="erp-btn-sub" style="flex:1;">Print Again</button>
+                                            <button id="btn-sp-view-history" class="erp-btn-sub" style="flex:1;">View History</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Hidden compatibility elements to support legacy preview.js methods & test harnesses -->
+                    <div id="ws-billing-completion-panel" style="display:none;"><div id="comp-val-box"></div></div>
+                    <div id="ws-step-1" style="display:none;"></div>
+                    <div id="ws-step-2" style="display:none;"></div>
+                    <div id="ws-step-3" style="display:none;"></div>
+                    <button id="btn-step1-continue" style="display:none;"></button>
+                    <button id="btn-choice-skip-studio" style="display:none;"></button>
+                    <button id="btn-step2-back-choice" style="display:none;"></button>
+                    <button id="btn-step3-back" style="display:none;"></button>
+                    <select id="setup-print-type" style="display:none;"></select>
+                    <select id="setup-paper-size" style="display:none;"></select>
+                    <select id="setup-sides" style="display:none;"></select>
+                    <span id="inv-paper" style="display:none;"></span>
+                    <span id="inv-layout" style="display:none;"></span>
+                    <span id="inv-copies" style="display:none;"></span>
+                    <span id="inv-extras" style="display:none;"></span>
+                    <div id="inv-extras-row" style="display:none;"></div>
+                </section>

@@ -1,0 +1,303 @@
+                <section id="workspace" class="view ws-view">
+
+                    <!-- Top Operator Action Bar -->
+                    <div class="ws-top-bar">
+                        <div class="ws-top-bar-left">
+                            <span class="ws-badge-brand">COUNTER DESK</span>
+                            <h1 class="ws-page-heading">Create Order</h1>
+                            <span class="ws-hint-text">Serve counter customer in seconds</span>
+                        </div>
+                        <div class="ws-top-bar-right">
+                            <button id="btn-quick-walkin" class="ws-pill-btn" type="button" title="Auto-fill walk-in customer">
+                                <span>🚶</span> <span>Walk-in Customer</span>
+                            </button>
+                            <button id="btn-reset-order" class="ws-pill-btn ws-pill-ghost" type="button" title="Clear current order">
+                                <span>🔄</span> <span>Reset Form</span>
+                            </button>
+                            <div class="ws-datetime" id="ws-datetime"></div>
+                        </div>
+                    </div>
+
+                    <!-- Hidden compatibility step bars for legacy scripts -->
+                    <div class="ws-steps-bar" style="display: none;">
+                        <div class="ws-step active" id="wsbar-1"><div class="ws-step-num">1</div><div class="ws-step-info"><span class="ws-step-title">Order Details</span><span class="ws-step-sub">Customer &amp; Files</span></div></div>
+                        <div class="ws-step" id="wsbar-2"><div class="ws-step-num">2</div><div class="ws-step-info"><span class="ws-step-title">Edit &amp; Preview</span></div></div>
+                        <div class="ws-step" id="wsbar-3"><div class="ws-step-num">3</div><div class="ws-step-info"><span class="ws-step-title">Billing</span></div></div>
+                    </div>
+
+                    <!-- Main 2-Column Unified Layout -->
+                    <div class="ws-unified-container">
+                        <!-- LEFT COLUMN: The Rapid Order Flow -->
+                        <div class="ws-col-main">
+                            <!-- 1. CUSTOMER CARD -->
+                            <div class="ws-card ws-card-customer">
+                                <div class="ws-card-header">
+                                    <div class="ws-card-title-group">
+                                        <span class="ws-card-icon">👤</span>
+                                        <h3 class="ws-card-title">1. Customer Information</h3>
+                                    </div>
+                                    <button class="ws-link-btn" id="btn-view-history" style="display:none;" type="button">📋 View Past Orders</button>
+                                </div>
+                                
+                                <div class="ws-form-grid-3">
+                                    <div class="ws-form-field" style="position:relative;">
+                                        <label>Customer Search / Phone <span class="ws-req">*</span></label>
+                                        <div class="ws-input-icon-wrap">
+                                            <span>🔍</span>
+                                            <input type="text" id="setup-phone" class="ws-input-field" placeholder="Search customer or phone..." autocomplete="off" autofocus>
+                                        </div>
+                                        <div id="setup-search-results" class="search-results" style="top:100%;left:0;right:0;"></div>
+                                    </div>
+                                    <div class="ws-form-field">
+                                        <label>Customer Name <span class="ws-req">*</span></label>
+                                        <div class="ws-input-icon-wrap">
+                                            <span>👤</span>
+                                            <input type="text" id="setup-name" class="ws-input-field" placeholder="Walk-in Customer">
+                                        </div>
+                                    </div>
+                                    <div class="ws-form-field">
+                                        <label>GSTIN (Optional)</label>
+                                        <div class="ws-input-icon-wrap">
+                                            <span>💼</span>
+                                            <input type="text" id="setup-gstin" class="ws-input-field" placeholder="15-digit GSTIN..." maxlength="15">
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <select id="setup-state" style="display: none;">
+                                    <option value="Local" selected>Local (CGST+SGST)</option>
+                                    <option value="Interstate">Interstate (IGST)</option>
+                                </select>
+                            </div>
+
+                            <!-- 2. PRINT FILES CARD -->
+                            <div class="ws-card ws-card-files">
+                                <div class="ws-card-header">
+                                    <div class="ws-card-title-group">
+                                        <span class="ws-card-icon">📁</span>
+                                        <h3 class="ws-card-title">2. Print Files</h3>
+                                    </div>
+                                    <button class="ws-btn-browse" id="btn-browse-files" type="button">
+                                        <span>➕</span> <span>Add Files</span>
+                                    </button>
+                                </div>
+
+                                <div class="ws-dropzone" id="setup-files-list">
+                                    <div class="ws-drop-hint" id="setup-files-empty">
+                                        <div class="ws-drop-icon">📂</div>
+                                        <div class="ws-drop-text">Drag &amp; drop files here, or click Add Files</div>
+                                        <div class="ws-drop-sub">PDF, JPG, PNG, TIFF supported • Instant page count</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 3. PRINT SETTINGS CARD -->
+                            <div class="ws-card ws-card-settings">
+                                <div class="ws-card-header">
+                                    <div class="ws-card-title-group">
+                                        <span class="ws-card-icon">⚙️</span>
+                                        <h3 class="ws-card-title">3. Product &amp; Print Configuration</h3>
+                                    </div>
+                                    <span id="preflight-rec-badge" class="ws-rec-chip" style="display: none;">✨ Recommended Match</span>
+                                </div>
+
+                                <!-- Product / Paper Selector Grid -->
+                                <div class="ws-products-wrapper">
+                                    <div class="ws-sub-label">Select Product / Paper Profile:</div>
+                                    <div id="paper-options-container" style="display: none;"></div>
+                                    <div id="product-grid-container" class="ws-product-grid">
+                                        <div class="ws-loading">Loading catalog...</div>
+                                    </div>
+                                </div>
+
+                                <!-- Common Settings Row (Copies, Duplex, Color, Size) -->
+                                <div class="ws-common-controls-row">
+                                    <!-- Copies Stepper with Quick Chips -->
+                                    <div class="ws-control-unit">
+                                        <label>Copies</label>
+                                        <div class="ws-stepper-combo">
+                                            <div class="ws-stepper">
+                                                <button type="button" class="ws-stepper-btn" id="copies-minus">−</button>
+                                                <input type="number" id="setup-copies" class="ws-stepper-input" value="1" min="1" max="99999">
+                                                <button type="button" class="ws-stepper-btn" id="copies-plus">+</button>
+                                            </div>
+                                            <div class="ws-quick-chips">
+                                                <button type="button" class="ws-chip-btn" data-add="1">+1</button>
+                                                <button type="button" class="ws-chip-btn" data-add="5">+5</button>
+                                                <button type="button" class="ws-chip-btn" data-add="10">+10</button>
+                                                <button type="button" class="ws-chip-btn" data-add="50">+50</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Dynamic Specs rendered by ProductConfigManager -->
+                                <div id="dynamic-job-config-container"></div>
+
+                                <!-- Progressive Disclosure: Collapsible Advanced Settings -->
+                                <details class="ws-advanced-box" id="ws-advanced-box">
+                                    <summary class="ws-advanced-summary">
+                                        <span>⚙️ Advanced Options (N-up, Page Range, Doc Studio)</span>
+                                        <span class="ws-summary-chevron">▼</span>
+                                    </summary>
+                                    <div class="ws-advanced-content">
+                                        <div class="ws-form-grid-3">
+                                            <div class="ws-form-field">
+                                                <label>Pages Per Sheet (N-Up)</label>
+                                                <select id="layout-images-per-page" class="ws-select-field">
+                                                    <option value="1" selected>1-Up (Standard full page)</option>
+                                                    <option value="2">2-Up (2 pages per sheet)</option>
+                                                    <option value="4">4-Up (4 pages per sheet)</option>
+                                                </select>
+                                            </div>
+                                            <div class="ws-form-field">
+                                                <label>Page Range (e.g. 1-5, 8)</label>
+                                                <input type="text" id="setup-page-range" class="ws-input-field" placeholder="All pages">
+                                            </div>
+                                            <div class="ws-form-field" style="justify-content: flex-end;">
+                                                <button type="button" class="ws-btn-studio" id="btn-choice-open-studio">
+                                                    <span>🎨</span> <span>Edit in Doc Studio</span>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div id="extras-container" class="ws-extras-list" style="margin-top: 12px;"></div>
+                                    </div>
+                                </details>
+                            </div>
+                        </div>
+
+                        <!-- RIGHT COLUMN: Sticky Live Summary & Primary Action -->
+                        <div class="ws-col-summary">
+                            <div class="ws-summary-sticky-card">
+                                <div class="ws-sum-header">
+                                    <span class="ws-sum-badge">LIVE SUMMARY</span>
+                                    <h3 class="ws-sum-title">Order Breakdown</h3>
+                                </div>
+
+                                <div class="ws-sum-body">
+                                    <!-- Customer & Files info -->
+                                    <div class="ws-sum-meta-block">
+                                        <div class="ws-sum-row">
+                                            <span class="ws-sum-label">Customer:</span>
+                                            <span class="ws-sum-val" id="billing-customer-name">Walk-in Customer</span>
+                                        </div>
+                                        <div class="ws-sum-row" id="billing-phone-row">
+                                            <span class="ws-sum-label">Phone:</span>
+                                            <span class="ws-sum-val" id="billing-customer-phone">—</span>
+                                        </div>
+                                        <div class="ws-sum-row">
+                                            <span class="ws-sum-label">Files Attached:</span>
+                                            <span class="ws-sum-val" id="bill-total-files">0</span>
+                                        </div>
+                                        <div class="ws-sum-row">
+                                            <span class="ws-sum-label">Printed Pages:</span>
+                                            <span class="ws-sum-val" id="bill-printed-pages">0</span>
+                                        </div>
+                                    </div>
+
+                                    <!-- Configuration Summary Chips -->
+                                    <div class="ws-sum-chips" id="inv-summary-chips">
+                                        <span class="ws-chip" id="inv-chip-paper">No paper</span>
+                                        <span class="ws-chip" id="inv-chip-layout">1-up</span>
+                                        <span class="ws-chip" id="inv-chip-copies">×1</span>
+                                    </div>
+
+                                    <!-- Itemized Price Breakdown -->
+                                    <div class="ws-breakdown-section">
+                                        <div class="ws-breakdown-title">PRICE BREAKDOWN</div>
+                                        <div id="invoice-table-body" class="ws-breakdown-list">
+                                            <div class="ws-breakdown-empty">Add files to calculate</div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Grand Total Block -->
+                                    <div class="ws-grand-total-block">
+                                        <div class="ws-gt-label">GRAND TOTAL (INCL. GST)</div>
+                                        <div id="bill-total-cost" class="ws-gt-amount">₹0.00</div>
+                                    </div>
+
+                                    <!-- Status Banner for In-flight feedback -->
+                                    <div id="comp-status-banner" class="comp-status-banner" style="display: none;">
+                                        <span id="comp-banner-spinner" class="comp-spinner" style="display: none;">🌀</span>
+                                        <span id="comp-banner-text">Processing...</span>
+                                    </div>
+
+                                    <!-- SINGLE DOMINANT PRIMARY CTA -->
+                                    <div class="ws-primary-cta-group" id="ws-primary-cta-container">
+                                        <button id="btn-action-save-print" class="ws-btn-primary-cta" type="button">
+                                            <span class="cta-icon">🖨️</span>
+                                            <span class="cta-text-wrap">
+                                                <span class="cta-main-text">CREATE ORDER</span>
+                                                <span class="cta-sub-text">Save invoice &amp; dispatch to print</span>
+                                            </span>
+                                            <span class="cta-shortcut">Ctrl+Enter</span>
+                                        </button>
+                                        
+                                        <!-- Subordinate Secondary Actions -->
+                                        <div class="ws-secondary-actions-row">
+                                            <button id="btn-action-save-only" class="ws-btn-subordinate" type="button" title="Save record to database without immediate printing">
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                                                <span>Save Only</span>
+                                            </button>
+                                            <button id="btn-action-schedule" class="ws-btn-subordinate" type="button" title="Schedule job for a specific date and time">
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                                                <span>Schedule</span>
+                                            </button>
+                                            <button id="btn-action-print-only" class="ws-btn-subordinate" type="button" title="Direct print bypass without saving database record">
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                                                <span>Print Only</span>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <!-- POST-ORDER RAPID COMPLETION PANEL (Appears instantly on order success) -->
+                                    <div id="order-success-rapid-panel" class="ws-success-panel" style="display: none;">
+                                        <div class="ws-sp-header">
+                                            <span class="ws-sp-icon">
+                                                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#15803d" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                                            </span>
+                                            <div>
+                                                <h4 id="ws-sp-title" class="ws-sp-title">Order #1001 Created!</h4>
+                                                <p id="ws-sp-sub" class="ws-sp-sub">Saved to database and invoiced.</p>
+                                            </div>
+                                        </div>
+                                        <div class="ws-sp-actions">
+                                            <button id="btn-start-next-order" class="ws-sp-btn-next" type="button">
+                                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                                <span>NEW ORDER</span> <span class="sp-shortcut">(Enter)</span>
+                                            </button>
+                                            <div class="ws-sp-links">
+                                                <button id="btn-sp-reprint" class="ws-sp-link" type="button">
+                                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                                                    Print Again
+                                                </button>
+                                                <button id="btn-sp-view-history" class="ws-sp-link" type="button">
+                                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                                    View in History
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Hidden compatibility elements to support legacy preview.js methods & test harnesses -->
+                    <div id="ws-billing-completion-panel" style="display:none;"><div id="comp-val-box"></div></div>
+                    <div id="ws-step-1" style="display:none;"></div>
+                    <div id="ws-step-2" style="display:none;"></div>
+                    <div id="ws-step-3" style="display:none;"></div>
+                    <button id="btn-step1-continue" style="display:none;"></button>
+                    <button id="btn-choice-skip-studio" style="display:none;"></button>
+                    <button id="btn-step2-back-choice" style="display:none;"></button>
+                    <button id="btn-step3-back" style="display:none;"></button>
+                    <select id="setup-print-type" style="display:none;"></select>
+                    <select id="setup-paper-size" style="display:none;"></select>
+                    <select id="setup-sides" style="display:none;"></select>
+                    <span id="inv-paper" style="display:none;"></span>
+                    <span id="inv-layout" style="display:none;"></span>
+                    <span id="inv-copies" style="display:none;"></span>
+                    <span id="inv-extras" style="display:none;"></span>
+                    <div id="inv-extras-row" style="display:none;"></div>
+                </section>
