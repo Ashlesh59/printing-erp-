@@ -291,5 +291,7 @@ contextBridge.exposeInMainWorld('api', {
   // Cloud & Control Center
   cloudEnroll: (key, shopName, serverUrl) => ipcRenderer.invoke('cloud:enroll', key, shopName, serverUrl),
   cloudStatus: () => ipcRenderer.invoke('cloud:status'),
-  cloudReconnect: () => ipcRenderer.invoke('cloud:reconnect')
+  cloudReconnect: () => ipcRenderer.invoke('cloud:reconnect'),
+  cloudGetDiagnostics: () => ipcRenderer.invoke('cloud:getDiagnostics'),
+  cloudReportError: (errorData) => ipcRenderer.invoke('cloud:reportError', errorData)
 });

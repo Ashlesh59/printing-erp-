@@ -1,116 +1,966 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Cloud Control Center</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DeskSolutions Control Center & Co-Pilot</title>
     <style>
-        body { font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; }
-        .card { background: #1e293b; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #334155; }
-        .status-online { color: #10b981; font-weight: bold; }
-        .status-offline { color: #ef4444; font-weight: bold; }
-        .status-revoked { color: #f59e0b; font-weight: bold; }
-        button { background: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
-        button:hover { background: #2563eb; }
-        .btn-danger { background: #ef4444; }
+        :root {
+            --bg-dark: #090d16;
+            --bg-card: #131b2e;
+            --bg-card-hover: #1c2742;
+            --border: #233152;
+            --text-main: #f1f5f9;
+            --text-muted: #94a3b8;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --purple: #8b5cf6;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            background-color: #0d1527;
+            border-bottom: 1px solid var(--border);
+            padding: 16px 28px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brand h1 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            color: #fff;
+        }
+
+        .brand-badge {
+            background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+            color: white;
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 9999px;
+            text-transform: uppercase;
+        }
+
+        .header-status {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 10px var(--success);
+            display: inline-block;
+        }
+
+        nav {
+            display: flex;
+            background-color: #101a33;
+            border-bottom: 1px solid var(--border);
+            padding: 0 28px;
+            gap: 8px;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 14px 18px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .tab-btn:hover {
+            color: #fff;
+        }
+
+        .tab-btn.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+        }
+
+        main {
+            flex: 1;
+            padding: 28px;
+            max-width: 1400px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        .tab-pane {
+            display: none;
+        }
+
+        .tab-pane.active {
+            display: block;
+        }
+
+        /* Metrics Bar */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 28px;
+        }
+
+        .metric-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 18px;
+        }
+
+        .metric-card .title {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+
+        .metric-card .value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .metric-card.success .value { color: var(--success); }
+        .metric-card.warning .value { color: var(--warning); }
+        .metric-card.danger .value { color: var(--danger); }
+        .metric-card.purple .value { color: var(--purple); }
+
+        /* Card Container */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 18px;
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.88rem;
+        }
+
+        th {
+            text-align: left;
+            padding: 12px 14px;
+            background: #0f172a;
+            color: var(--text-muted);
+            font-weight: 600;
+            border-bottom: 1px solid var(--border);
+        }
+
+        td {
+            padding: 14px;
+            border-bottom: 1px solid #1e293b;
+            color: var(--text-main);
+        }
+
+        tr:hover td {
+            background: var(--bg-card-hover);
+        }
+
+        /* Badges */
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .badge-online { background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); }
+        .badge-offline { background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); }
+        .badge-revoked { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3); }
+        .badge-critical { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+        .badge-warning { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+        .badge-info { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+
+        /* Buttons */
+        .btn {
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn:hover { background: var(--accent-hover); }
+        .btn-danger { background: var(--danger); }
         .btn-danger:hover { background: #dc2626; }
+        .btn-sm { padding: 5px 10px; font-size: 0.78rem; }
+        .btn-secondary { background: #334155; }
+        .btn-secondary:hover { background: #475569; }
+
+        /* Form Inputs */
+        input, select, textarea {
+            background: #090d16;
+            border: 1px solid var(--border);
+            color: #fff;
+            padding: 9px 14px;
+            border-radius: 6px;
+            font-size: 0.88rem;
+            outline: none;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            border-color: var(--accent);
+        }
+
+        .search-bar {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        /* Co-Pilot AI Chat Console */
+        .copilot-container {
+            display: flex;
+            flex-direction: column;
+            height: 520px;
+            background: #0d1527;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .copilot-messages {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .copilot-msg {
+            max-width: 80%;
+            padding: 12px 18px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            white-space: pre-wrap;
+        }
+
+        .copilot-msg.assistant {
+            align-self: flex-start;
+            background: #1e293b;
+            color: #e2e8f0;
+            border-left: 3px solid var(--purple);
+        }
+
+        .copilot-msg.user {
+            align-self: flex-end;
+            background: var(--accent);
+            color: white;
+        }
+
+        .copilot-chips {
+            display: flex;
+            gap: 8px;
+            padding: 10px 20px;
+            background: #0a1020;
+            border-top: 1px solid #1a2744;
+            overflow-x: auto;
+        }
+
+        .chip-btn {
+            background: #1e293b;
+            color: #94a3b8;
+            border: 1px solid #334155;
+            padding: 6px 12px;
+            border-radius: 9999px;
+            font-size: 0.78rem;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .chip-btn:hover {
+            color: white;
+            border-color: var(--accent);
+        }
+
+        .copilot-input-bar {
+            display: flex;
+            padding: 14px 20px;
+            background: #131b2e;
+            gap: 12px;
+            border-top: 1px solid var(--border);
+        }
+
+        .copilot-input-bar input {
+            flex: 1;
+        }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.75);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal-content {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 90vh;
+            overflow-y: auto;
+            padding: 28px;
+        }
     </style>
 </head>
 <body>
-    <h1>DeskSolutions Cloud Control Center</h1>
-    
-    <div class="card">
-        <h2>Enrollment</h2>
-        <button onclick="generateKey()">Generate Enrollment Key</button>
-        <div id="key-display" style="margin-top: 10px; font-size: 1.2em; font-family: monospace; color: #10b981;"></div>
-    </div>
-    
-    <div class="card">
-        <h2>Active Shops</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Shop ID</th>
-                    <th>Name</th>
-                    <th>Status</th>
-                    <th>Version</th>
-                    <th>Uptime</th>
-                    <th>Last Seen</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody id="shop-list">
-                <tr><td colspan="7">Loading...</td></tr>
-            </tbody>
-        </table>
+
+    <header>
+        <div class="brand">
+            <h1>DeskSolutions Control Center</h1>
+            <span class="brand-badge">Co-Pilot 24/7</span>
+        </div>
+        <div class="header-status">
+            <span><span class="pulse-dot"></span> System Live</span>
+            <span id="header-time"></span>
+        </div>
+    </header>
+
+    <nav>
+        <button class="tab-btn active" onclick="switchTab('overview')">Overview</button>
+        <button class="tab-btn" onclick="switchTab('shops')">Shops Directory</button>
+        <button class="tab-btn" onclick="switchTab('enrollment')">Enrollment Keys</button>
+        <button class="tab-btn" onclick="switchTab('alerts')">Alerts & Notifications</button>
+        <button class="tab-btn" onclick="switchTab('diagnostics')">Diagnostics & Errors</button>
+        <button class="tab-btn" onclick="switchTab('audit')">Audit & Commands</button>
+        <button class="tab-btn" onclick="switchTab('copilot')">Co-Pilot Intelligence</button>
+    </nav>
+
+    <main>
+        <!-- Metrics Bar -->
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="title">Total Enrolled Shops</div>
+                <div class="value" id="m-total-shops">0</div>
+            </div>
+            <div class="metric-card success">
+                <div class="title">Online Now</div>
+                <div class="value" id="m-online-shops">0</div>
+            </div>
+            <div class="metric-card danger">
+                <div class="title">Offline / Disconnected</div>
+                <div class="value" id="m-offline-shops">0</div>
+            </div>
+            <div class="metric-card warning">
+                <div class="title">Active Alerts</div>
+                <div class="value" id="m-active-alerts">0</div>
+            </div>
+        </div>
+
+        <!-- Tab 1: Overview -->
+        <div id="tab-overview" class="tab-pane active">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Fleet Real-Time Status</h2>
+                    <button class="btn btn-sm btn-secondary" onclick="refreshData()">Refresh</button>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Shop ID</th>
+                            <th>Name</th>
+                            <th>Status</th>
+                            <th>Version</th>
+                            <th>Memory / Health</th>
+                            <th>Last Check-In</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="overview-shops-tbody">
+                        <tr><td colspan="7">Loading fleet telemetry...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Tab 2: Shops Directory -->
+        <div id="tab-shops" class="tab-pane">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Enrolled PrintShop Installations</h2>
+                </div>
+                <div class="search-bar">
+                    <input type="text" id="shop-search" placeholder="Search by Shop ID or Name..." oninput="renderShops()">
+                    <select id="shop-status-filter" onchange="renderShops()">
+                        <option value="all">All Statuses</option>
+                        <option value="online">Online Only</option>
+                        <option value="offline">Offline Only</option>
+                        <option value="revoked">Revoked Only</option>
+                    </select>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Shop ID</th>
+                            <th>Shop Name</th>
+                            <th>Status</th>
+                            <th>Installed Version</th>
+                            <th>Uptime</th>
+                            <th>Active Alerts</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="shops-tbody">
+                        <tr><td colspan="7">Loading directory...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Tab 3: Enrollment Keys -->
+        <div id="tab-enrollment" class="tab-pane">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Generate Shop Enrollment Key</h2>
+                    <button class="btn" onclick="generateKey()">+ Generate New Key</button>
+                </div>
+                <p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 14px;">
+                    Keys are cryptographically unique and valid for 24 hours. Once redeemed by an installation, 1 permanent Shop ID is created.
+                </p>
+                <div id="new-key-banner" style="display:none; background: #064e3b; border: 1px solid #059669; padding: 14px; border-radius: 6px; margin-bottom: 16px;">
+                    <span style="color: #6ee7b7; font-weight: bold;" id="new-key-text"></span>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Key</th>
+                            <th>Status</th>
+                            <th>Assigned Shop ID</th>
+                            <th>Created</th>
+                            <th>Expires</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="keys-tbody">
+                        <tr><td colspan="6">Loading keys...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Tab 4: Alerts & Notifications -->
+        <div id="tab-alerts" class="tab-pane">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">24/7 Alerts & Fleet Notifications</h2>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Severity</th>
+                            <th>Shop ID</th>
+                            <th>Event Type</th>
+                            <th>Message</th>
+                            <th>Timestamp</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="alerts-tbody">
+                        <tr><td colspan="7">Loading alerts...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Tab 5: Diagnostics & Errors -->
+        <div id="tab-diagnostics" class="tab-pane">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Recent Fleet Error Reports & Diagnostics</h2>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Shop ID</th>
+                            <th>Error Type</th>
+                            <th>Message</th>
+                            <th>Timestamp</th>
+                        </tr>
+                    </thead>
+                    <tbody id="errors-tbody">
+                        <tr><td colspan="4">Loading error reports...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Tab 6: Audit & Commands -->
+        <div id="tab-audit" class="tab-pane">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Immutable Audit Log & Command Lifecycle</h2>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Shop ID</th>
+                            <th>Action</th>
+                            <th>Actor</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody id="audit-tbody">
+                        <tr><td colspan="5">Loading audit records...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Tab 7: Co-Pilot Intelligence -->
+        <div id="tab-copilot" class="tab-pane">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Operational Co-Pilot</h2>
+                </div>
+                <div class="copilot-container">
+                    <div class="copilot-messages" id="copilot-msgs">
+                        <div class="copilot-msg assistant">
+                            Hello Operator. I am your DeskSolutions Co-Pilot. I monitor all shops, heartbeats, alerts, and commands in real time. Ask me anything regarding fleet health, offline shops, recent errors, or specific shop IDs.
+                        </div>
+                    </div>
+                    <div class="copilot-chips">
+                        <button class="chip-btn" onclick="askCopilot('Which shops are currently offline?')">Which shops are offline?</button>
+                        <button class="chip-btn" onclick="askCopilot('Show active critical alerts')">Active critical alerts</button>
+                        <button class="chip-btn" onclick="askCopilot('Recent application errors')">Recent error reports</button>
+                        <button class="chip-btn" onclick="askCopilot('Fleet health summary')">Fleet health summary</button>
+                    </div>
+                    <div class="copilot-input-bar">
+                        <input type="text" id="copilot-input" placeholder="Ask Co-Pilot about shops, diagnostics, alerts..." onkeydown="if(event.key==='Enter') sendCopilotQuery()">
+                        <button class="btn" onclick="sendCopilotQuery()">Send Query</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Shop Details Modal -->
+    <div class="modal-overlay" id="shop-modal">
+        <div class="modal-content">
+            <div class="card-header">
+                <h2 class="card-title" id="modal-shop-title">Shop Details</h2>
+                <button class="btn btn-sm btn-secondary" onclick="closeModal()">Close</button>
+            </div>
+            <div id="modal-shop-body">Loading...</div>
+        </div>
     </div>
 
     <script>
-        async function fetchShops() {
-            const res = await fetch('/api/control/shops');
-            const shops = await res.json();
-            const tbody = document.getElementById('shop-list');
+        let cachedShops = [];
+
+        function updateClock() {
+            document.getElementById('header-time').innerText = new Date().toLocaleTimeString();
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
             
-            if (shops.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7">Waiting for shop telemetry...</td></tr>';
+            const btn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick').includes(tabId));
+            if (btn) btn.classList.add('active');
+            
+            const pane = document.getElementById('tab-' + tabId);
+            if (pane) pane.classList.add('active');
+            
+            if (tabId === 'enrollment') loadKeys();
+            if (tabId === 'alerts') loadAlerts();
+            if (tabId === 'diagnostics') loadErrors();
+            if (tabId === 'audit') loadAudit();
+        }
+
+        async function fetchHealth() {
+            try {
+                const res = await fetch('/api/health');
+                const data = await res.json();
+                document.getElementById('m-total-shops').innerText = data.shops;
+                document.getElementById('m-online-shops').innerText = data.onlineShops;
+                document.getElementById('m-offline-shops').innerText = data.offlineShops;
+                document.getElementById('m-active-alerts').innerText = data.activeAlerts;
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function fetchShops() {
+            try {
+                const res = await fetch('/api/control/shops');
+                cachedShops = await res.json();
+                renderOverview();
+                renderShops();
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function renderOverview() {
+            const tbody = document.getElementById('overview-shops-tbody');
+            if (cachedShops.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No shops enrolled yet. Generate an enrollment key to connect installations.</td></tr>';
                 return;
             }
 
-            tbody.innerHTML = shops.map(shop => {
-                const isOnline = shop.isOnline;
-                const statusClass = shop.status === 'revoked' ? 'status-revoked' : (isOnline ? 'status-online' : 'status-offline');
-                const statusText = shop.status === 'revoked' ? 'REVOKED' : (isOnline ? 'ONLINE' : 'OFFLINE');
-                const hb = shop.heartbeat || {};
-                
+            tbody.innerHTML = cachedShops.map(s => {
+                const badgeClass = s.status === 'revoked' ? 'badge-revoked' : (s.isOnline ? 'badge-online' : 'badge-offline');
+                const badgeText = s.status === 'revoked' ? 'REVOKED' : (s.isOnline ? 'ONLINE' : 'OFFLINE');
+                const hb = s.heartbeat || {};
+                const lastSeenStr = hb.lastSeen ? new Date(hb.lastSeen).toLocaleTimeString() : 'Never';
+                const memStr = hb.memoryUsage ? `${hb.memoryUsage} MB (${hb.dbStatus || 'OK'})` : '-';
+
                 return `
                     <tr>
-                        <td>${shop.shopId}</td>
-                        <td>${shop.name}</td>
-                        <td class="${statusClass}">${statusText}</td>
+                        <td><strong>${s.shopId}</strong></td>
+                        <td>${s.name}</td>
+                        <td><span class="badge ${badgeClass}">${badgeText}</span></td>
                         <td>${hb.version || '-'}</td>
-                        <td>${hb.uptime ? (hb.uptime / 3600).toFixed(1) + 'h' : '-'}</td>
-                        <td>${hb.lastSeen ? new Date(hb.lastSeen).toLocaleString() : '-'}</td>
+                        <td>${memStr}</td>
+                        <td>${lastSeenStr}</td>
                         <td>
-                            ${shop.status !== 'revoked' ? \`<button class="btn-danger" onclick="revokeShop('\${shop.shopId}')">Revoke</button>\` : 'Revoked'}
-                            ${isOnline ? \`<button onclick="sendCommand('\${shop.shopId}', 'restart')">Restart</button>\` : ''}
+                            <button class="btn btn-sm" onclick="openShopModal('${s.shopId}')">Inspect</button>
                         </td>
                     </tr>
                 `;
             }).join('');
         }
 
+        function renderShops() {
+            const tbody = document.getElementById('shops-tbody');
+            const search = (document.getElementById('shop-search')?.value || '').toLowerCase();
+            const filter = document.getElementById('shop-status-filter')?.value || 'all';
+
+            const filtered = cachedShops.filter(s => {
+                const matchesSearch = s.shopId.toLowerCase().includes(search) || s.name.toLowerCase().includes(search);
+                if (!matchesSearch) return false;
+                if (filter === 'online') return s.isOnline && s.status !== 'revoked';
+                if (filter === 'offline') return !s.isOnline && s.status !== 'revoked';
+                if (filter === 'revoked') return s.status === 'revoked';
+                return true;
+            });
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No matching shops found.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = filtered.map(s => {
+                const badgeClass = s.status === 'revoked' ? 'badge-revoked' : (s.isOnline ? 'badge-online' : 'badge-offline');
+                const badgeText = s.status === 'revoked' ? 'REVOKED' : (s.isOnline ? 'ONLINE' : 'OFFLINE');
+                const hb = s.heartbeat || {};
+                const uptimeStr = hb.uptime ? (hb.uptime / 3600).toFixed(1) + 'h' : '-';
+
+                return `
+                    <tr>
+                        <td><strong>${s.shopId}</strong></td>
+                        <td>${s.name}</td>
+                        <td><span class="badge ${badgeClass}">${badgeText}</span></td>
+                        <td>${hb.version || '-'}</td>
+                        <td>${uptimeStr}</td>
+                        <td>${s.activeAlerts > 0 ? `<span class="badge badge-warning">${s.activeAlerts} Active</span>` : '0'}</td>
+                        <td>
+                            <button class="btn btn-sm" onclick="openShopModal('${s.shopId}')">Details</button>
+                            ${s.status !== 'revoked' ? `<button class="btn btn-sm btn-danger" onclick="revokeShop('${s.shopId}')">Revoke</button>` : ''}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        async function openShopModal(shopId) {
+            document.getElementById('shop-modal').style.display = 'flex';
+            document.getElementById('modal-shop-title').innerText = `Shop Operational View: ${shopId}`;
+            const body = document.getElementById('modal-shop-body');
+            body.innerHTML = 'Loading operational telemetry...';
+
+            try {
+                const res = await fetch(`/api/control/shop/${shopId}`);
+                const data = await res.json();
+                const hb = data.heartbeat || {};
+
+                body.innerHTML = `
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;">
+                        <div style="background: #090d16; padding: 14px; border-radius: 6px;">
+                            <div style="font-size: 0.8rem; color: var(--text-muted);">SHOP IDENTITY</div>
+                            <div style="font-size: 1.1rem; font-weight: bold; margin-top: 4px;">${data.name}</div>
+                            <div style="font-size: 0.85rem; color: var(--text-muted); font-family: monospace;">${data.shopId}</div>
+                        </div>
+                        <div style="background: #090d16; padding: 14px; border-radius: 6px;">
+                            <div style="font-size: 0.8rem; color: var(--text-muted);">CONNECTIVITY</div>
+                            <div style="margin-top: 4px;">
+                                <span class="badge ${data.isOnline ? 'badge-online' : 'badge-offline'}">${data.isOnline ? 'ONLINE' : 'OFFLINE'}</span>
+                            </div>
+                            <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Last seen: ${hb.lastSeen ? new Date(hb.lastSeen).toLocaleString() : 'Never'}</div>
+                        </div>
+                    </div>
+
+                    <div class="card" style="margin-bottom: 20px;">
+                        <h3 style="font-size: 0.95rem; margin-bottom: 12px;">Remote Capability Dispatcher (Signed)</h3>
+                        <div style="display: flex; gap: 10px;">
+                            <select id="modal-cmd-select" style="flex:1;">
+                                <option value="request_diagnostics">Request Diagnostics</option>
+                                <option value="request_health">Request Health Telemetry</option>
+                                <option value="lock">Lock Terminal Session</option>
+                                <option value="restart">Restart PrintShop Application</option>
+                                <option value="request_backup">Trigger Database Backup</option>
+                                <option value="check_updates">Check For Updates</option>
+                                <option value="reconnect">Force Cloud Reconnect</option>
+                            </select>
+                            <button class="btn" onclick="sendShopCommand('${shopId}')">Dispatch Command</button>
+                        </div>
+                    </div>
+
+                    <h3 style="font-size: 0.95rem; margin-bottom: 8px;">Recent Remote Commands</h3>
+                    <table style="margin-bottom: 20px;">
+                        <thead>
+                            <tr><th>Command</th><th>Timestamp</th><th>Status</th><th>Result</th></tr>
+                        </thead>
+                        <tbody>
+                            ${(data.recentCommands || []).map(c => `
+                                <tr>
+                                    <td><strong>${c.command}</strong></td>
+                                    <td>${new Date(c.timestamp).toLocaleTimeString()}</td>
+                                    <td><span class="badge badge-info">${c.status}</span></td>
+                                    <td><small>${c.result ? c.result.substring(0, 40) : '-'}</small></td>
+                                </tr>
+                            `).join('') || '<tr><td colspan="4">No recent commands.</td></tr>'}
+                        </tbody>
+                    </table>
+                `;
+            } catch (e) {
+                body.innerHTML = `<div style="color:var(--danger)">Failed to load shop details: ${e.message}</div>`;
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('shop-modal').style.display = 'none';
+        }
+
+        async function sendShopCommand(shopId) {
+            const command = document.getElementById('modal-cmd-select').value;
+            try {
+                const res = await fetch('/api/control/command', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ shopId, command })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert(`Command "${command}" signed & dispatched successfully (ID: ${data.commandId})`);
+                    openShopModal(shopId);
+                } else {
+                    alert(`Failed to dispatch command: ${data.message || data.error}`);
+                }
+            } catch (e) {
+                alert(`Error: ${e.message}`);
+            }
+        }
+
         async function revokeShop(shopId) {
-            if (!confirm('Are you sure you want to revoke this shop?')) return;
+            if (!confirm(`Are you sure you want to revoke access for ${shopId}?`)) return;
             await fetch('/api/admin/revoke', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ shopId })
             });
-            fetchShops();
-        }
-
-        async function sendCommand(shopId, command) {
-            await fetch('/api/control/command', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ shopId, command })
-            });
-            alert('Command sent');
+            refreshData();
         }
 
         async function generateKey() {
             const res = await fetch('/api/admin/keys', { method: 'POST' });
             const data = await res.json();
             if (data.success) {
-                document.getElementById('key-display').innerText = `Generated Key: ${data.key} (Valid for 24h)`;
-            } else {
-                alert('Failed to generate key');
+                const banner = document.getElementById('new-key-banner');
+                banner.style.display = 'block';
+                document.getElementById('new-key-text').innerText = `Generated Key: ${data.key} (Valid for 24h)`;
+                loadKeys();
             }
         }
 
-        fetchShops();
-        setInterval(fetchShops, 5000);
+        async function loadKeys() {
+            const res = await fetch('/api/admin/keys');
+            const data = await res.json();
+            const tbody = document.getElementById('keys-tbody');
+            tbody.innerHTML = (data.keys || []).map(k => `
+                <tr>
+                    <td><strong style="font-family: monospace; color: #38bdf8;">${k.key}</strong></td>
+                    <td><span class="badge ${k.status === 'ACTIVE' ? 'badge-online' : (k.status === 'USED' ? 'badge-info' : 'badge-offline')}">${k.status}</span></td>
+                    <td>${k.shopId || '-'}</td>
+                    <td>${new Date(k.createdAt).toLocaleDateString()}</td>
+                    <td>${new Date(k.expiresAt).toLocaleDateString()}</td>
+                    <td>
+                        ${k.status === 'ACTIVE' ? `<button class="btn btn-sm btn-danger" onclick="revokeKey('${k.key}')">Revoke</button>` : '-'}
+                    </td>
+                </tr>
+            `).join('') || '<tr><td colspan="6">No keys found.</td></tr>';
+        }
+
+        async function revokeKey(key) {
+            if (!confirm(`Revoke key ${key}?`)) return;
+            await fetch('/api/admin/keys/revoke', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key })
+            });
+            loadKeys();
+        }
+
+        async function loadAlerts() {
+            const res = await fetch('/api/control/alerts');
+            const alerts = await res.json();
+            const tbody = document.getElementById('alerts-tbody');
+            tbody.innerHTML = alerts.map(a => `
+                <tr>
+                    <td><span class="badge badge-${a.severity}">${a.severity.toUpperCase()}</span></td>
+                    <td><strong>${a.shopId}</strong></td>
+                    <td>${a.type}</td>
+                    <td>${a.message}</td>
+                    <td>${new Date(a.timestamp).toLocaleTimeString()}</td>
+                    <td><span class="badge ${a.status === 'active' ? 'badge-warning' : 'badge-online'}">${a.status.toUpperCase()}</span></td>
+                    <td>
+                        ${a.status === 'active' ? `<button class="btn btn-sm" onclick="resolveAlert('${a.id}')">Resolve</button>` : '-'}
+                    </td>
+                </tr>
+            `).join('') || '<tr><td colspan="7">No alerts recorded.</td></tr>';
+        }
+
+        async function resolveAlert(id) {
+            await fetch(`/api/control/alerts/${id}/resolve`, { method: 'POST' });
+            loadAlerts();
+            fetchHealth();
+        }
+
+        async function loadErrors() {
+            const res = await fetch('/api/control/errors');
+            const errors = await res.json();
+            const tbody = document.getElementById('errors-tbody');
+            tbody.innerHTML = errors.map(e => `
+                <tr>
+                    <td><strong>${e.shopId}</strong></td>
+                    <td><span class="badge badge-warning">${e.errorType}</span></td>
+                    <td>${e.message}</td>
+                    <td>${new Date(e.timestamp).toLocaleTimeString()}</td>
+                </tr>
+            `).join('') || '<tr><td colspan="4">No error reports.</td></tr>';
+        }
+
+        async function loadAudit() {
+            const res = await fetch('/api/control/audit');
+            const logs = await res.json();
+            const tbody = document.getElementById('audit-tbody');
+            tbody.innerHTML = logs.map(l => `
+                <tr>
+                    <td>${new Date(l.timestamp).toLocaleTimeString()}</td>
+                    <td><strong>${l.shopId}</strong></td>
+                    <td><span class="badge badge-info">${l.action}</span></td>
+                    <td>${l.actor}</td>
+                    <td><small>${l.details}</small></td>
+                </tr>
+            `).join('') || '<tr><td colspan="5">No audit entries.</td></tr>';
+        }
+
+        async function askCopilot(query) {
+            document.getElementById('copilot-input').value = query;
+            sendCopilotQuery();
+        }
+
+        async function sendCopilotQuery() {
+            const input = document.getElementById('copilot-input');
+            const q = input.value.trim();
+            if (!q) return;
+
+            const msgs = document.getElementById('copilot-msgs');
+            msgs.innerHTML += `<div class="copilot-msg user">${q}</div>`;
+            input.value = '';
+            msgs.scrollTop = msgs.scrollHeight;
+
+            try {
+                const res = await fetch('/api/copilot/query', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: q })
+                });
+                const data = await res.json();
+                msgs.innerHTML += `<div class="copilot-msg assistant">${data.answer}</div>`;
+                msgs.scrollTop = msgs.scrollHeight;
+            } catch (e) {
+                msgs.innerHTML += `<div class="copilot-msg assistant" style="color:var(--danger)">Error querying Co-Pilot: ${e.message}</div>`;
+            }
+        }
+
+        function refreshData() {
+            fetchHealth();
+            fetchShops();
+        }
+
+        refreshData();
+        setInterval(refreshData, 5000);
     </script>
 </body>
 </html>

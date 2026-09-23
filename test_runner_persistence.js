@@ -1,8 +1,16 @@
 
         const path = require('path');
         const fs = require('fs');
-        const { app } = require('electron');
+        let app = null;
+        try {
+            const electron = require('electron');
+            app = (typeof electron === 'object' && electron && electron.app) ? electron.app : null;
+        } catch(e) {}
+        if (!app) app = { getAppPath: () => __dirname, getPath: () => __dirname, getVersion: () => '1.0.0' };
         if (!app.getAppPath) app.getAppPath = () => __dirname;
+        
+        const { initDatabase } = require('./src/main/database/schema');
+        initDatabase();
         
         const { CustomerModel } = require('./src/main/database/models');
         const EventBus = require('./src/main/events/EventBus');

@@ -34,9 +34,14 @@ class MockAutoUpdater extends EventEmitter {
 }
 
 const mockUpdater = new MockAutoUpdater();
-const { app } = require('electron');
-const path = require('path');
+let app = null;
+try {
+    const electron = require('electron');
+    app = (typeof electron === 'object' && electron && electron.app) ? electron.app : null;
+} catch(e) {}
+if (!app) app = { getAppPath: () => __dirname, getPath: () => __dirname, getVersion: () => '1.0.0' };
 if (!app.getAppPath) app.getAppPath = () => __dirname;
+const path = require('path');
 const Module = require('module');
 const originalRequire = Module.prototype.require;
 Module.prototype.require = function(mod) {

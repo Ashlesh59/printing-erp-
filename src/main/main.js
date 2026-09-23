@@ -1007,18 +1007,25 @@ function createWindow() {
     });
 
     registerGuardedHandler('cloud:status', ROLES.PUBLIC, () => {
-      return {
-        enrolled: CloudClient.shopId !== 'UNCONFIGURED-SHOP',
-        shopId: CloudClient.shopId,
-        connected: CloudClient.ws && CloudClient.ws.readyState === WebSocket.OPEN,
-        server: CloudClient.cloudUrl,
-        reconnectAttempts: CloudClient.reconnectAttempts
-      };
+      return CloudClient.getStatus();
     });
 
     registerGuardedHandler('cloud:reconnect', ROLES.ADMIN, () => {
-      if (CloudClient.ws) CloudClient.ws.close();
+      if (CloudClient.ws) {
+        try { CloudClient.ws.close(); } catch(e) {}
+      }
       CloudClient.connect();
+      return { success: true };
+    });
+
+    registerGuardedHandler('cloud:getDiagnostics', ROLES.ADMIN, () => {
+      return CloudClient.sendDiagnostics();
+    });
+
+    registerGuardedHandler('cloud:reportError', ROLES.OPERATOR, (e, errorData) => {
+      if (errorData && typeof errorData === 'object') {
+        CloudClient.reportError(errorData.type, errorData.message, errorData.stack);
+      }
       return { success: true };
     });
 
