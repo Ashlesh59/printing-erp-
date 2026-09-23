@@ -32,6 +32,10 @@ async function runPhase63AuthTests() {
         }
     }
 
+    // Setup isolated test database path before requiring DB modules
+    const tempDbPath = path.join(__dirname, `temp_auth_test_${Date.now()}.db`);
+    process.env.TEST_DB_PATH = tempDbPath;
+
     // 1. Initialize Database & Security modules
     const { initDatabase } = require('./src/main/database/schema');
     initDatabase();
@@ -335,9 +339,16 @@ async function runPhase63AuthTests() {
         }
     });
 
-    // Clean up test data
-    db.prepare("DELETE FROM users WHERE id IN (1, 2)").run();
+    // Clean up test data and temporary test database
     authThrottle.resetAll();
+    try {
+        if (db && db.close) db.close();
+    } catch(e) {}
+    try {
+        if (fs.existsSync(tempDbPath)) fs.unlinkSync(tempDbPath);
+        if (fs.existsSync(tempDbPath + '-wal')) fs.unlinkSync(tempDbPath + '-wal');
+        if (fs.existsSync(tempDbPath + '-shm')) fs.unlinkSync(tempDbPath + '-shm');
+    } catch(e) {}
 
     // Summary
     console.log('\n════════════════════════════════════════════════════════════════════════════');

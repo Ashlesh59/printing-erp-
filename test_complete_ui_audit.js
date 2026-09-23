@@ -1,10 +1,30 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 console.log("==========================================================================");
 console.log("PRINTSHOP MANAGER — END-TO-END OPERATOR WORKFLOW & UI INTEGRITY AUDIT");
 console.log("==========================================================================");
+
+const { LicenseService } = require('./src/main/security/license-service');
+const SessionManager = require('./src/main/security/session-manager');
+
+// Activate valid test license for audit run
+const testKeyPair = crypto.generateKeyPairSync('ed25519');
+LicenseService.setVerificationPublicKey(testKeyPair.publicKey);
+const auditPayload = {
+    license_id: 'LIC-AUDIT-2026-001',
+    product: 'PrintShopManager',
+    tier: 'PRO',
+    issued_at: '2026-01-01',
+    expires_at: '2028-12-31',
+    shop_name: 'Apex Digital Print Works'
+};
+const auditPayloadBuf = Buffer.from(JSON.stringify(auditPayload), 'utf8');
+const auditSig = crypto.sign(null, auditPayloadBuf, testKeyPair.privateKey);
+const validAuditLicense = `PSM-ED25519.${auditPayloadBuf.toString('base64')}.${auditSig.toString('base64')}`;
+LicenseService.activateLicense(validAuditLicense);
 
 require('./src/main/main');
 
@@ -54,6 +74,9 @@ app.whenReady().then(async () => {
 
     const runExhaustiveAudit = async () => {
         console.log("\n[OPERATOR AUDIT] DOM Loaded. Executing End-to-End Operator Workflow Audit...\n");
+
+        // Ensure session exists for audit runner
+        SessionManager.createSession(mainWindow.webContents, { id: 1, name: 'Master Admin', role: 'Admin' }, 'Admin');
 
         try {
             const report = await mainWindow.webContents.executeJavaScript(`
@@ -108,12 +131,23 @@ app.whenReady().then(async () => {
                     };
 
                     try {
-                        // 1. Enter Shop Mode
+                        // 1. Enter Shop Mode & Authenticate
+                        if (window.api && window.api.login) {
+                            try { await window.api.login({ pin: '849201', role: 'Operator' }); } catch(e) {}
+                        }
                         const shopBtn = Array.from(document.querySelectorAll('.role-btn'))
                             .find(b => b.textContent.includes('Shop'));
                         if (shopBtn) {
                             shopBtn.click();
                             await sleep(400);
+                            const pinModal = document.getElementById('pin-lock-modal');
+                            if (pinModal && pinModal.classList.contains('active')) {
+                                const inputEl = document.getElementById('pin-visible-input') || document.getElementById('pin-hidden-input');
+                                if (inputEl) inputEl.value = '849201';
+                                const submitBtn = document.getElementById('pin-submit-btn');
+                                if (submitBtn) submitBtn.click();
+                                await sleep(300);
+                            }
                             recordPass('Shop Mode Entry', 'Role selected and main ERP dashboard mounted.');
                         } else {
                             recordUIBreak('Shop Mode Button', 'Shop mode button missing from Role Selection screen.');
@@ -145,11 +179,16 @@ app.whenReady().then(async () => {
                                 tag: "VIP",
                                 address: "Commercial Plaza #4"
                             });
-                            recordPass('Customer Creation API', 'Created customer ID: ' + (newCustRes.id || newCustRes));
+                            const custId = (newCustRes && typeof newCustRes === 'object') ? (newCustRes.id || (newCustRes.customer && newCustRes.customer.id)) : newCustRes;
+                            if (custId) {
+                                recordPass('Customer Creation API', 'Created customer ID: ' + custId);
+                            } else {
+                                recordWorkflowBreak('Customer Creation API', 'Failed to obtain customer ID: ' + JSON.stringify(newCustRes));
+                            }
                         }
 
                         // 3.2 Add order directly via API & simulate full UI completion
-                        if (window.api && window.api.createOrder) {
+                        if (window.api && (window.api.createOrder || window.api.submitOrder)) {
                             const sampleOrder = {
                                 customer_id: 1,
                                 files: [{
@@ -170,8 +209,13 @@ app.whenReady().then(async () => {
                                 payment_method: "Cash",
                                 notes: "Customer requested high quality gloss finish."
                             };
-                            const createdOrd = await window.api.createOrder(sampleOrder);
-                            recordPass('Order Pipeline Execution', 'Order created successfully with ID: ' + (createdOrd.id || createdOrd));
+                            const createdOrd = window.api.submitOrder ? await window.api.submitOrder(sampleOrder) : await window.api.createOrder(sampleOrder);
+                            const ordId = (createdOrd && typeof createdOrd === 'object') ? (createdOrd.orderId || createdOrd.id || (createdOrd.order && createdOrd.order.id)) : createdOrd;
+                            if (ordId) {
+                                recordPass('Order Pipeline Execution', 'Order created successfully with ID: ' + ordId);
+                            } else {
+                                recordWorkflowBreak('Order Pipeline Execution', 'Failed to obtain order ID: ' + JSON.stringify(createdOrd));
+                            }
                         }
 
                         // 4. Production Queue & Kanban Drag/Drop Audit
@@ -190,20 +234,35 @@ app.whenReady().then(async () => {
                         await clickEl('.nav-btn[data-target="inventory"]', 'Nav to Inventory');
                         await sleep(200);
 
-                        const invItems = await window.api.getInvItems();
-                        recordPass('Inventory Database Sync', 'Retrieved ' + (invItems ? invItems.length : 0) + ' inventory stock items.');
+                        const invItemsRaw = await window.api.getInvItems();
+                        const invCount = Array.isArray(invItemsRaw) ? invItemsRaw.length : (invItemsRaw && Array.isArray(invItemsRaw.items) ? invItemsRaw.items.length : null);
+                        if (typeof invCount === 'number') {
+                            recordPass('Inventory Database Sync', 'Retrieved ' + invCount + ' inventory stock items.');
+                        } else {
+                            recordWorkflowBreak('Inventory Database Sync', 'Invalid inventory response shape: ' + JSON.stringify(invItemsRaw));
+                        }
 
                         // 6. Customer CRM Directory Audit
                         await clickEl('.nav-btn[data-target="customers"]', 'Nav to Customers');
                         await sleep(200);
-                        const allCusts = await window.api.getAllCustomers(10, 0);
-                        recordPass('Customer CRM Database Sync', 'Retrieved ' + (allCusts ? allCusts.length : 0) + ' active customer profiles.');
+                        const allCustsRaw = await window.api.getAllCustomers(10, 0);
+                        const custCount = Array.isArray(allCustsRaw) ? allCustsRaw.length : (allCustsRaw && Array.isArray(allCustsRaw.customers) ? allCustsRaw.customers.length : null);
+                        if (typeof custCount === 'number') {
+                            recordPass('Customer CRM Database Sync', 'Retrieved ' + custCount + ' active customer profiles.');
+                        } else {
+                            recordWorkflowBreak('Customer CRM Database Sync', 'Invalid customer response shape: ' + JSON.stringify(allCustsRaw));
+                        }
 
                         // 7. Order History Audit
                         await clickEl('.nav-btn[data-target="history"]', 'Nav to History');
                         await sleep(200);
-                        const recentOrders = await window.api.getRecentOrders(10, 0);
-                        recordPass('Order History CRM Sync', 'Retrieved ' + (recentOrders ? recentOrders.length : 0) + ' historical billing orders.');
+                        const recentOrdersRaw = await window.api.getRecentOrders(10, 0);
+                        const orderCount = Array.isArray(recentOrdersRaw) ? recentOrdersRaw.length : (recentOrdersRaw && Array.isArray(recentOrdersRaw.orders) ? recentOrdersRaw.orders.length : null);
+                        if (typeof orderCount === 'number') {
+                            recordPass('Order History CRM Sync', 'Retrieved ' + orderCount + ' historical billing orders.');
+                        } else {
+                            recordWorkflowBreak('Order History CRM Sync', 'Invalid orders response shape: ' + JSON.stringify(recentOrdersRaw));
+                        }
 
                         // 8. Doc Studio Workspace Audit
                         await clickEl('.nav-btn[data-target="doc-studio"]', 'Nav to Doc Studio');
@@ -219,10 +278,15 @@ app.whenReady().then(async () => {
                         // 10. Settings & Hardware Management Audit
                         await clickEl('.nav-btn[data-target="settings"]', 'Nav to Settings');
                         await sleep(200);
-                        const printers = await window.api.getPrinters();
-                        const pricing = await window.api.getPricing();
-                        const license = await window.api.getLicenseInfo();
-                        recordPass('Hardware & Settings Engine', 'Connected printers: ' + printers.length + ', pricing matrix loaded, license verified.');
+                        const printersRaw = await window.api.getPrinters();
+                        const pricingRaw = await window.api.getPricing();
+                        const licenseRaw = await window.api.getLicenseInfo();
+                        const printerCount = Array.isArray(printersRaw) ? printersRaw.length : (printersRaw && Array.isArray(printersRaw.printers) ? printersRaw.printers.length : (printersRaw ? 0 : null));
+                        if (typeof printerCount === 'number') {
+                            recordPass('Hardware & Settings Engine', 'Connected printers: ' + printerCount + ', pricing matrix loaded, license verified.');
+                        } else {
+                            recordWorkflowBreak('Hardware & Settings Engine', 'Invalid printers response shape: ' + JSON.stringify(printersRaw));
+                        }
 
                     } catch (err) {
                         recordWorkflowBreak('Audit Exception', err.stack);

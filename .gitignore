@@ -11,3 +11,4 @@ cloud-server/node_modules/
 cloud-server/uploads/*
 !cloud-server/uploads/.gitkeep
 PrintSimulator/*.pdf
+cloud-server/*.db

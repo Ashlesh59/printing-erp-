@@ -134,7 +134,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const wsBtn = document.querySelector('.nav-btn[data-target="workspace"]');
             if (wsBtn) wsBtn.click();
         } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
-            const searchInput = document.getElementById('global-search-input') || document.getElementById('ps-search-input');
+            const searchInput = document.getElementById('ps-search-input');
             if (searchInput) {
                 e.preventDefault();
                 searchInput.focus();
@@ -505,6 +505,39 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!window.api || !window.api.getDashboardStats) return;
         
         try {
+            // Dynamic Live Date
+            const dateEl = document.getElementById('dash-live-date');
+            if (dateEl) {
+                try {
+                    const now = new Date();
+                    dateEl.textContent = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(now);
+                } catch(e) {
+                    dateEl.textContent = new Date().toDateString();
+                }
+            }
+
+            // Dynamic User Role & Greeting
+            let currentRole = 'Operator';
+            let currentName = 'Operator';
+            if (window.currentUser) {
+                currentRole = window.currentUser.role || 'Operator';
+                currentName = window.currentUser.name || currentRole;
+            }
+            const headerRoleEl = document.getElementById('header-user-role');
+            if (headerRoleEl) headerRoleEl.textContent = currentName;
+
+            const dashRoleEl = document.getElementById('dash-user-role');
+            if (dashRoleEl) dashRoleEl.textContent = currentName;
+            const dashAvatarEl = document.querySelector('.lux-profile-avatar');
+            if (dashAvatarEl) dashAvatarEl.textContent = (currentName || 'O').charAt(0).toUpperCase();
+
+            const greetingHeading = document.getElementById('dash-greeting-heading');
+            if (greetingHeading) {
+                const hour = new Date().getHours();
+                const timeOfDay = hour < 12 ? 'Good morning' : (hour < 17 ? 'Good afternoon' : 'Good evening');
+                greetingHeading.textContent = `${timeOfDay}, ${currentName}`;
+            }
+
             const stats = await window.api.getDashboardStats();
             
             // Cloud Sync Indicator
@@ -931,25 +964,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (typeof loadBudgetTracker === 'function') loadBudgetTracker();
                 }
                 if (targetId === 'workspace') {
-                    // Reset order state on navigating to Create Order
+                    if (typeof window.resetOrderState === 'function') {
+                        window.resetOrderState();
+                    }
                     const _setupPhone = document.getElementById('setup-phone');
-                    const _setupName = document.getElementById('setup-name');
-                    if (_setupPhone) _setupPhone.value = '';
-                    if (_setupName) _setupName.value = '';
-                    if (typeof window.currentCustomerId !== 'undefined') window.currentCustomerId = null;
-                    if (typeof window.currentOrderFiles !== 'undefined') window.currentOrderFiles = [];
-                    const _btnViewHistory = document.getElementById('btn-view-history');
-                    if (_btnViewHistory) _btnViewHistory.style.display = 'none';
-                    const bn = document.getElementById('billing-customer-name');
-                    const bp = document.getElementById('billing-customer-phone');
-                    if (bn) bn.textContent = '—';
-                    if (bp) bp.textContent = '—';
-                    setTimeout(() => {
-                        if (typeof loadExtrasForOrderSetup === 'function') loadExtrasForOrderSetup();
-                        if (typeof window.updateWorkspace === 'function') window.updateWorkspace();
-                        if (typeof goToStep === 'function') goToStep(1);
-                        if (_setupPhone) _setupPhone.focus();
-                    }, 0);
+                    if (_setupPhone) setTimeout(() => _setupPhone.focus(), 50);
                 }
                 console.log(`[Nav Lifecycle] Navigation Complete: '${targetId}' is active.`);
             } catch (err) {
@@ -1401,10 +1420,138 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     window.billItems = [];
-    window.currentOrderConfigGlobal = {};
-    window.currentOrderConfig = window.currentOrderConfigGlobal;
+    window.currentOrderConfig = {
+        phone: '',
+        name: '',
+        copies: 1,
+        nUp: 1,
+        pageRange: '',
+        specifications: {},
+        calculatedPages: 0,
+        calculatedPrice: 0,
+        paper: null,
+        printType: 'bw',
+        paperSize: 'A4',
+        sides: 'Single',
+        extras: []
+    };
+    try {
+        Object.defineProperty(window, 'currentOrderConfigGlobal', {
+            get() { return window.currentOrderConfig; },
+            set(v) { window.currentOrderConfig = v; },
+            configurable: true,
+            enumerable: true
+        });
+    } catch(e) {}
 
-    window.updateInvoiceTable = (totalFiles, printedPages) => {
+    window.resetOrderState = function() {
+        console.log('[Workspace] Authoritative resetOrderState() invoked.');
+        // 1. Files & Previews
+        currentOrderFiles = [];
+        window.currentOrderFiles = [];
+        if (typeof fileSettings !== 'undefined') fileSettings = [];
+        if (typeof currentFiles !== 'undefined') currentFiles = [];
+        if (typeof window.fileSettings !== 'undefined') window.fileSettings = [];
+        if (typeof window.currentFiles !== 'undefined') window.currentFiles = [];
+        window.currentDocStudioOutput = null;
+
+        // 2. Customer State
+        currentCustomerId = null;
+        window.currentCustomerId = null;
+        const _setupPhone = document.getElementById('setup-phone');
+        const _setupName = document.getElementById('setup-name');
+        const _setupGstin = document.getElementById('setup-gstin');
+        const _setupState = document.getElementById('setup-state');
+        const _searchSuggestions = document.getElementById('customer-search-suggestions');
+        if (_setupPhone) _setupPhone.value = '';
+        if (_setupName) _setupName.value = '';
+        if (_setupGstin) _setupGstin.value = '';
+        if (_setupState) _setupState.value = 'Local';
+        if (_searchSuggestions) _searchSuggestions.style.display = 'none';
+
+        const _btnViewHistory = document.getElementById('btn-view-history');
+        if (_btnViewHistory) _btnViewHistory.style.display = 'none';
+
+        const bn = document.getElementById('billing-customer-name');
+        const bp = document.getElementById('billing-customer-phone');
+        if (bn) bn.textContent = 'Walk-in Customer';
+        if (bp) bp.textContent = '—';
+
+        // 3. Product & Specification Reset
+        window.selectedProductId = null;
+        window.selectedProfileId = null;
+        document.querySelectorAll('.product-card').forEach(c => c.classList.remove('active'));
+        const configContainer = document.getElementById('dynamic-config-container');
+        if (configContainer) configContainer.innerHTML = '';
+
+        const selectedPaper = typeof window.getSelectedPaperPricing === 'function' ? window.getSelectedPaperPricing() : null;
+        window.currentOrderConfig = {
+            phone: '',
+            name: '',
+            copies: 1,
+            nUp: 1,
+            pageRange: '',
+            specifications: {},
+            calculatedPages: 0,
+            calculatedPrice: 0,
+            paper: selectedPaper,
+            printType: selectedPaper ? (selectedPaper.color_type === 'color' ? 'color' : 'bw') : 'bw',
+            paperSize: selectedPaper ? (selectedPaper.paper_size || 'A4') : 'A4',
+            sides: selectedPaper ? (selectedPaper.sides || 'Single') : 'Single',
+            extras: []
+        };
+
+        // 4. Form Controls
+        const _setupCopies = document.getElementById('setup-copies');
+        const _setupPageRange = document.getElementById('setup-page-range');
+        const _layoutNUp = document.getElementById('layout-images-per-page');
+        if (_setupCopies) _setupCopies.value = '1';
+        if (_setupPageRange) _setupPageRange.value = '';
+        if (_layoutNUp) _layoutNUp.value = '1';
+
+        // 5. Attached Files UI
+        const filesList = document.getElementById('ws-attached-files');
+        if (filesList) filesList.innerHTML = '';
+        const dropzoneInput = document.getElementById('file-input');
+        if (dropzoneInput) dropzoneInput.value = '';
+
+        const previewContainer = document.getElementById('layout-preview-container');
+        const previewLayout = document.getElementById('preview-layout-container');
+        if (previewContainer) previewContainer.innerHTML = '';
+        if (previewLayout) previewLayout.innerHTML = '';
+
+        const emptyPreview = document.getElementById('ws-preview-empty');
+        if (emptyPreview) emptyPreview.classList.remove('hidden');
+
+        // 6. Action State, Banners & Panels
+        if (typeof isWorkspaceActionBusy !== 'undefined') isWorkspaceActionBusy = false;
+        if (typeof savedOrderIdForRetry !== 'undefined') savedOrderIdForRetry = null;
+        window.currentJobToSchedule = null;
+
+        const banner = document.getElementById('comp-status-banner');
+        if (banner) banner.style.display = 'none';
+
+        const rapidPanel = document.getElementById('order-success-rapid-panel');
+        if (rapidPanel) rapidPanel.style.display = 'none';
+
+        const ctaContainer = document.getElementById('ws-primary-cta-container');
+        if (ctaContainer) ctaContainer.style.display = 'flex';
+
+        if (typeof setActionsDisabled === 'function') setActionsDisabled(false);
+
+        // 7. Renderers & Summary
+        if (typeof renderAttachedFiles === 'function') renderAttachedFiles();
+        if (typeof window.updateInvoiceTable === 'function') window.updateInvoiceTable(0, 0);
+        if (typeof loadExtrasForOrderSetup === 'function') loadExtrasForOrderSetup();
+        if (typeof goToStep === 'function') goToStep(1);
+
+        try {
+            localStorage.removeItem('psm_draft_order_backup');
+        } catch(e) {}
+    };
+    window.clearWorkspace = window.resetOrderState;
+
+    window.updateInvoiceTable = async (totalFiles, printedPages) => {
         const invoiceBody = document.getElementById('invoice-table-body');
         if (!invoiceBody) return;
         
@@ -1412,12 +1559,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         const paper = window.getSelectedPaperPricing();
         const extras = window.getSelectedExtras();
-        const copies = parseInt(setupCopies?.value) || 1;
+        const copies = parseInt(document.getElementById('setup-copies')?.value) || 1;
         
         let totalCost = 0;
 
         if (window.selectedProductId) {
-            totalCost = window.currentOrderConfigGlobal.calculatedPrice || 0;
+            totalCost = window.currentOrderConfig.calculatedPrice || 0;
             
             const product = Array.from(document.querySelectorAll('.product-card')).find(c => parseInt(c.dataset.productId) === window.selectedProductId);
             if (product) {
@@ -1431,27 +1578,40 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         } else {
             if (printedPages > 0 && paper) {
-                const paperCost = printedPages * paper.price;
-                window.billItems.push({
-                    name: `${paper.name} × ${printedPages} pgs`,
-                    qty: copies,
-                    rate: paper.price,
-                    amount: paperCost * copies
-                });
-                totalCost += paperCost * copies;
-            }
-
-            if (printedPages > 0 && extras.length > 0) {
-                extras.forEach(ext => {
-                    const extCost = ext.price * copies;
+                try {
+                    const rawItems = [{
+                        sourcePages: printedPages,
+                        physicalSheets: printedPages,
+                        copies: copies,
+                        paperSize: paper.name,
+                        printType: paper.type || 'bw',
+                        unitPrice: paper.price,
+                        extras: extras.map(e => ({ name: e.name, price: e.price }))
+                    }];
+                    
+                    if (window.api && typeof window.api.calculatePricing === 'function') {
+                        const pricingSnap = await window.api.calculatePricing(rawItems, { });
+                        if (pricingSnap && pricingSnap.grandTotal !== undefined) {
+                            totalCost = pricingSnap.grandTotal;
+                        }
+                    } else {
+                        // Fallback if not available
+                        const paperCost = printedPages * paper.price;
+                        let extrasTotal = 0;
+                        extras.forEach(ext => extrasTotal += ext.price);
+                        totalCost = (paperCost + extrasTotal) * copies;
+                    }
+                    
+                    // Simple UI list breakdown
                     window.billItems.push({
-                        name: `+ ${ext.name}`,
+                        name: `${paper.name} × ${printedPages} pgs (PricingEngine)`,
                         qty: copies,
-                        rate: ext.price,
-                        amount: extCost
+                        rate: totalCost / copies,
+                        amount: totalCost
                     });
-                    totalCost += extCost;
-                });
+                } catch(e) {
+                    console.error("PricingEngine calculation error:", e);
+                }
             }
         }
 
@@ -1471,8 +1631,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         const elTotalCost = document.getElementById('bill-total-cost');
         
         if (elTotalFiles) elTotalFiles.textContent = totalFiles;
-        if (elPrintedPages) elPrintedPages.textContent = printedPages;
-        if (elTotalCost) elTotalCost.textContent = `₹${totalCost.toFixed(2)}`;
+        if (elPrintedPages) {
+            elPrintedPages.textContent = window.currentOrderConfig?.isResolvingPages ? 'Calculating...' : printedPages;
+        }
+        if (elTotalCost) {
+            elTotalCost.textContent = window.currentOrderConfig?.isResolvingPages ? 'Calculating...' : (totalCost === 0 ? '₹0.00 (No Pricing)' : `₹${totalCost.toFixed(2)}`);
+        }
 
         // Update settings summary panel
         const invPaper = document.getElementById('inv-paper');
@@ -1507,8 +1671,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         }
 
-        window.currentOrderConfigGlobal.calculatedPages = printedPages;
-        window.currentOrderConfigGlobal.calculatedPrice = totalCost;
+        window.currentOrderConfig.calculatedPages = printedPages;
+        window.currentOrderConfig.calculatedPrice = totalCost;
+        
+        // Notify doc-workspace if active
+        if (typeof window.updateWorkspaceUI === 'function') {
+            window.updateWorkspaceUI();
+        }
     };
 
     window.updateWorkspace = () => {
@@ -1520,7 +1689,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const nUp = parseInt(document.getElementById('layout-images-per-page')?.value) || 1;
         const pageRange = document.getElementById('setup-page-range')?.value.trim() || '';
 
-        window.currentOrderConfigGlobal = {
+        window.currentOrderConfig = {
+            ...window.currentOrderConfig,
             phone: setupPhone?.value.trim() || '',
             name: setupName?.value.trim() || '',
             paper: selectedPaper,
@@ -1539,7 +1709,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             print_quality: selectedPaper ? selectedPaper.print_quality : null
         };
 
-        window.initLayoutEditor(currentOrderFiles, window.currentOrderConfigGlobal);
+        window.initLayoutEditor(currentOrderFiles, window.currentOrderConfig);
     };
 
     if (setupCopies) setupCopies.addEventListener('input', () => {
@@ -3726,20 +3896,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // Bind Reload button clicks
-    const globalReloadBtn = document.getElementById('global-reload-btn');
-    if (globalReloadBtn) {
-        globalReloadBtn.addEventListener('click', () => executeReload(globalReloadBtn));
-    }
-    
-    const adminReloadBtn = document.getElementById('admin-reload-btn');
-    if (adminReloadBtn) {
-        adminReloadBtn.addEventListener('click', () => executeReload(adminReloadBtn));
-    }
-
-    const kioskReloadBtn = document.getElementById('kiosk-reload-btn');
-    if (kioskReloadBtn) {
-        kioskReloadBtn.addEventListener('click', () => executeReload(kioskReloadBtn));
-    }
+    document.querySelectorAll('#global-reload-btn, #admin-reload-btn, #dash-reload-btn, #kiosk-reload-btn, .header-action-btn-reload, .lux-icon-btn[title="Reload"]').forEach(btn => {
+        btn.addEventListener('click', () => executeReload(btn));
+    });
 
     // Check if we just reloaded to show success toast
     if (localStorage.getItem('psm_just_reloaded') === 'true') {
@@ -5166,24 +5325,46 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 const baseRate = parseFloat(productPrice) || 0;
                 let pages = 1;
-                if (window.currentOrderFiles && window.currentOrderFiles.length > 0) {
-                    pages = window.currentOrderFiles.length;
+                let isResolvingPages = false;
+                const activeFiles = window.currentOrderFiles || currentOrderFiles || [];
+                if (activeFiles.length > 0) {
+                    let totalPgs = 0;
+                    for (const f of activeFiles) {
+                        const fileObj = f.file || f;
+                        const isPdf = fileObj.ext === '.pdf' || (fileObj.name && fileObj.name.toLowerCase().endsWith('.pdf'));
+                        if (isPdf) {
+                            if (typeof fileObj.pages === 'number' && fileObj.pages > 0) {
+                                totalPgs += fileObj.pages;
+                            } else if (typeof f.pages === 'number' && f.pages > 0) {
+                                totalPgs += f.pages;
+                            } else {
+                                isResolvingPages = true;
+                                totalPgs += 1;
+                            }
+                        } else {
+                            totalPgs += 1;
+                        }
+                    }
+                    pages = Math.max(1, totalPgs);
                 }
+
+                window.currentOrderConfig.isResolvingPages = isResolvingPages;
 
                 const calculatedPrice = PricingEngine.calculatePrice(
                     baseRate,
                     config,
-                    window.currentOrderConfigGlobal.specifications,
+                    window.currentOrderConfig.specifications,
                     pages,
-                    window.currentOrderConfigGlobal.copies
+                    window.currentOrderConfig.copies
                 );
-                window.currentOrderConfigGlobal.calculatedPrice = calculatedPrice;
+                window.currentOrderConfig.calculatedPrice = calculatedPrice;
+                window.currentOrderConfig.calculatedPages = pages;
 
                 const invCopies = document.getElementById('inv-copies');
-                if (invCopies) invCopies.textContent = window.currentOrderConfigGlobal.copies;
+                if (invCopies) invCopies.textContent = window.currentOrderConfig.copies;
 
                 const invLayout = document.getElementById('inv-layout');
-                if (invLayout) invLayout.textContent = window.currentOrderConfigGlobal.nUp + '-up';
+                if (invLayout) invLayout.textContent = window.currentOrderConfig.nUp + '-up';
 
                 if (window.updateWorkspace) {
                     window.updateWorkspace();

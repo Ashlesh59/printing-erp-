@@ -257,26 +257,9 @@ button, .btn, .nav-btn, .action-btn {
     border-bottom: 1px solid var(--border-color);
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     padding: 0 40px;
     z-index: 90;
-}
-
-.search-bar input {
-    background-color: var(--input-bg);
-    border: 1px solid var(--border-color);
-    color: var(--text-primary);
-    padding: 10px 16px;
-    border-radius: 8px;
-    width: 300px;
-    font-size: 0.9rem;
-    transition: all 0.25s ease;
-}
-
-.search-bar input:focus {
-    outline: none;
-    border-color: var(--accent-color);
-    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.15);
 }
 
 /* Views */
@@ -4111,109 +4094,13 @@ body:has(#dashboard.luxury-dashboard.active) .top-bar {
     line-height: 1;
 }
 
-/* Vertical divider between greeting and actions */
-.lux-header-divider {
-    width: 1px;
-    height: 32px;
-    background: var(--lux-border);
-    flex-shrink: 0;
-}
-
 /* Right: Actions row — all controls share --ds-ctrl-h height */
 .lux-header-actions {
     display: flex;
     align-items: center;
     gap: var(--ds-space-2);
-    flex: 1;
     justify-content: flex-end;
     min-width: 0;
-}
-
-/* Search bar */
-.lux-search-bar {
-    position: relative;
-    display: flex;
-    align-items: center;
-    flex: 1;
-    max-width: 440px;
-    min-width: 180px;
-}
-
-.lux-search-bar input {
-    background: var(--surface, #FFFFFF) !important;
-    border: 1px solid var(--lux-border) !important;
-    border-radius: var(--lux-radius) !important;
-    height: var(--ds-ctrl-h) !important;
-    padding: 0 72px 0 44px !important;
-    width: 100%;
-    font-size: 13.5px;
-    font-weight: 400;
-    color: var(--lux-text);
-    box-shadow: var(--lux-shadow-sm);
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.lux-search-bar input::placeholder {
-    color: var(--lux-text-muted);
-    font-weight: 400;
-}
-
-.lux-search-bar input:focus {
-    border-color: var(--lux-primary) !important;
-    outline: none;
-    box-shadow: 0 0 0 3px rgba(163, 29, 51, 0.1) !important;
-}
-
-.lux-search-icon {
-    position: absolute;
-    left: 15px;
-    font-size: 0.9rem;
-    color: var(--lux-text-muted);
-    pointer-events: none;
-    top: 50%;
-    transform: translateY(-50%);
-    line-height: 1;
-}
-
-.lux-shortcut-badge {
-    position: absolute;
-    right: 10px;
-    background: var(--surface, #F3F4F6);
-    border: 1px solid var(--lux-border);
-    border-radius: 6px;
-    padding: 2px 6px;
-    font-size: 0.7rem;
-    font-weight: 600;
-    color: var(--lux-text-muted);
-    pointer-events: none;
-    white-space: nowrap;
-}
-
-/* Store badge */
-.lux-status-badge {
-    background: var(--surface, #FFFFFF);
-    border: 1px solid var(--lux-border);
-    padding: 0 14px;
-    height: var(--ds-ctrl-h);
-    border-radius: var(--lux-radius);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--lux-text);
-    box-shadow: var(--lux-shadow-sm);
-    white-space: nowrap;
-    flex-shrink: 0;
-}
-
-.lux-status-badge .status-dot {
-    width: 7px;
-    height: 7px;
-    background-color: #10B981;
-    border-radius: 50%;
-    display: inline-block;
-    flex-shrink: 0;
 }
 
 /* Icon-only reload button */
@@ -4694,12 +4581,7 @@ option { background-color: var(--card-bg-solid); color: var(--text-primary); }
 
     .lux-header-actions {
         flex-wrap: wrap;
-        justify-content: flex-start;
-    }
-
-    .lux-search-bar {
-        max-width: 100%;
-        min-width: 200px;
+        justify-content: flex-end;
     }
 
     .lux-quick-actions {
@@ -5283,30 +5165,7 @@ body {
     color: #94A3B8 !important;
 }
 
-.lux-search-bar input {
-    border: 1px solid #E2E8F0 !important;
-    border-radius: 8px !important;
-    height: 38px !important;
-    font-size: 13.5px !important;
-    background: #FFFFFF !important;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.04) !important;
-    padding: 0 60px 0 40px !important;
-}
 
-.lux-search-bar input:focus {
-    border-color: #A31D33 !important;
-    box-shadow: 0 0 0 3px rgba(163, 29, 51, 0.1) !important;
-}
-
-.lux-status-badge {
-    height: 36px;
-    padding: 0 12px;
-    border-radius: 8px;
-    font-size: 12.5px;
-    background: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
-}
 
 .lux-profile {
     height: 36px;
@@ -5897,51 +5756,10 @@ label,
 }
 
 /* ────────────────────────────────────────────────────────────────────────
-   SEARCH BAR — Taller, better contrast
-   ──────────────────────────────────────────────────────────────────────── */
-
-.lux-search-bar {
-    max-width: 400px !important;
-}
-
-.lux-search-bar input {
-    height: 42px !important;
-    font-size: 13.5px !important;
-    color: #0F172A !important;
-    border: 1.5px solid #E2E8F0 !important;
-    border-radius: 10px !important;
-    background: #FFFFFF !important;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.05) !important;
-    padding: 0 72px 0 42px !important;
-}
-
-.lux-search-bar input::placeholder {
-    color: #A0AEBF !important;
-    font-size: 13.5px !important;
-    font-weight: 400 !important;
-}
-
-.lux-search-bar input:focus {
-    border-color: #A31D33 !important;
-    box-shadow: 0 0 0 3px rgba(163, 29, 51, 0.10) !important;
-}
-
-.lux-shortcut-badge {
-    font-size: 10.5px !important;
-    font-weight: 600 !important;
-    color: #94A3B8 !important;
-    background: #F1F5F9 !important;
-    border: 1px solid #E2E8F0 !important;
-    border-radius: 5px !important;
-    padding: 2px 7px !important;
-    letter-spacing: 0.03em !important;
-}
-
 /* ────────────────────────────────────────────────────────────────────────
    HEADER CONTROLS — height 42px, aligned baseline
    ──────────────────────────────────────────────────────────────────────── */
 
-.lux-status-badge,
 .lux-btn-outline {
     height: 42px !important;
     font-size: 13px !important;

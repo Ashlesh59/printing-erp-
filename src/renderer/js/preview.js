@@ -362,14 +362,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function getActiveConfig() {
-        let cfg = (typeof currentOrderConfig !== 'undefined' && currentOrderConfig) ? currentOrderConfig : null;
-        if (!cfg && window.currentOrderConfig) cfg = window.currentOrderConfig;
-        if (!cfg && window.currentOrderConfigGlobal) cfg = window.currentOrderConfigGlobal;
-        if (!cfg) cfg = {};
+        let cfg = window.currentOrderConfig || window.currentOrderConfigGlobal || {};
 
         return {
-            name: cfg.name || cfg.customer_name || 'Guest Customer',
-            phone: cfg.phone || cfg.customer_phone || '0000000000',
+            name: cfg.name || cfg.customer_name || 'Walk-in Customer',
+            phone: cfg.phone || cfg.customer_phone || '',
             paperSize: cfg.paperSize || cfg.print_paper_size || (cfg.paper ? cfg.paper.name : 'A4'),
             paper_size: cfg.paper_size || cfg.print_paper_size || cfg.paperSize || 'A4',
             printType: cfg.printType || cfg.print_color_mode || 'B&W',
@@ -379,8 +376,8 @@ document.addEventListener('DOMContentLoaded', () => {
             copies: parseInt(cfg.copies) || 1,
             default_printer: cfg.default_printer || 'Default',
             calculatedPrice: parseFloat(cfg.calculatedPrice || cfg.price || cfg.total_price || 0),
-            product_id: cfg.product_id || null,
-            print_profile_id: cfg.print_profile_id || null,
+            product_id: cfg.product_id || window.selectedProductId || null,
+            print_profile_id: cfg.print_profile_id || window.selectedProfileId || null,
             specifications: cfg.specifications || {},
             extras: cfg.extras || [],
             paper: cfg.paper || null,
@@ -399,14 +396,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function ensureCustomer() {
         const cfg = getActiveConfig();
-        const cName = cfg.name || 'Guest Customer';
-        const cPhone = cfg.phone || '0000000000';
+        const cName = cfg.name || 'Walk-in Customer';
+        const cPhone = cfg.phone || '';
+        if (!cPhone || cName === 'Walk-in Customer') {
+            return null;
+        }
         const custResult = await window.api.createCustomer({ 
             name: cName, 
             phone: cPhone 
         });
         if (custResult.success) return custResult.id;
-        throw new Error(custResult.error);
+        return null;
     }
 
     async function executePrint() {
@@ -585,6 +585,10 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     window.clearWorkspace = function() {
+        if (typeof window.resetOrderState === 'function') {
+            window.resetOrderState();
+            return;
+        }
         savedOrderIdForRetry = null;
         if (typeof window.currentOrderFiles !== 'undefined') window.currentOrderFiles = [];
         if (typeof currentOrderFiles !== 'undefined') currentOrderFiles = [];
@@ -592,6 +596,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (typeof currentFiles !== 'undefined') currentFiles = [];
         window.currentDocStudioOutput = null;
         window.currentJobToSchedule = null;
+        window.selectedProductId = null;
+        window.selectedProfileId = null;
 
         const layoutContainer = document.getElementById('preview-layout-container');
         if (layoutContainer) layoutContainer.innerHTML = '';
@@ -634,7 +640,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnStartNextOrder = document.getElementById('btn-start-next-order');
     if (btnStartNextOrder) {
         btnStartNextOrder.addEventListener('click', () => {
-            window.clearWorkspace();
+            if (typeof window.resetOrderState === 'function') {
+                window.resetOrderState();
+            } else {
+                window.clearWorkspace();
+            }
             const setupPhone = document.getElementById('setup-phone');
             if (setupPhone) setupPhone.focus();
         });
@@ -645,13 +655,23 @@ document.addEventListener('DOMContentLoaded', () => {
         btnQuickWalkin.addEventListener('click', () => {
             const setupPhone = document.getElementById('setup-phone');
             const setupName = document.getElementById('setup-name');
-            if (setupPhone) setupPhone.value = '9999999999';
+            if (setupPhone) setupPhone.value = '';
             if (setupName) setupName.value = 'Walk-in Customer';
             
             const bn = document.getElementById('billing-customer-name');
             const bp = document.getElementById('billing-customer-phone');
             if (bn) bn.textContent = 'Walk-in Customer';
-            if (bp) bp.textContent = '9999999999';
+            if (bp) bp.textContent = '—';
+
+            if (window.currentOrderConfig) {
+                window.currentOrderConfig.name = 'Walk-in Customer';
+                window.currentOrderConfig.phone = '';
+            }
+            if (typeof window.currentCustomerId !== 'undefined') window.currentCustomerId = null;
+            if (typeof currentCustomerId !== 'undefined') currentCustomerId = null;
+
+            const suggestions = document.getElementById('customer-search-suggestions');
+            if (suggestions) suggestions.style.display = 'none';
 
             if (setupPhone) setupPhone.dispatchEvent(new Event('input', { bubbles: true }));
             if (setupName) setupName.dispatchEvent(new Event('input', { bubbles: true }));
@@ -815,8 +835,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     if (window.refreshAllWorkspaces) window.refreshAllWorkspaces();
                     
-                    const price = window.currentOrderConfigGlobal?.calculatedPrice || 0;
-                    window.showOrderSuccessRapidPanel(res.orderId, price);
+                    const finalPrice = (res && typeof res.grandTotal === 'number') ? res.grandTotal : (window.currentOrderConfig?.calculatedPrice || 0);
+                    window.showOrderSuccessRapidPanel(res.orderId, finalPrice);
                 } else {
                     throw new Error(res ? res.error : 'Order save failed');
                 }
@@ -878,8 +898,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     if (window.refreshAllWorkspaces) window.refreshAllWorkspaces();
                     
-                    const price = window.currentOrderConfigGlobal?.calculatedPrice || 0;
-                    window.showOrderSuccessRapidPanel(finalizedOrderId, price);
+                    const finalPrice = (saveRes && typeof saveRes.grandTotal === 'number') ? saveRes.grandTotal : (window.currentOrderConfig?.calculatedPrice || 0);
+                    window.showOrderSuccessRapidPanel(finalizedOrderId, finalPrice);
                 } else {
                     const err = printResult ? printResult.error : 'Printer offline or failed to respond';
                     if (banner && bannerText) {

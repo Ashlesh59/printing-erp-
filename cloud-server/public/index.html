@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cloud Control Center</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; }
+        .card { background: #1e293b; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #334155; }
+        .status-online { color: #10b981; font-weight: bold; }
+        .status-offline { color: #ef4444; font-weight: bold; }
+        .status-revoked { color: #f59e0b; font-weight: bold; }
+        button { background: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #2563eb; }
+        .btn-danger { background: #ef4444; }
+        .btn-danger:hover { background: #dc2626; }
+    </style>
+</head>
+<body>
+    <h1>DeskSolutions Cloud Control Center</h1>
+    <div class="card">
+        <h2>Active Shops</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Shop ID</th>
+                    <th>Name</th>
+                    <th>Status</th>
+                    <th>Version</th>
+                    <th>Uptime</th>
+                    <th>Last Seen</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="shop-list">
+                <tr><td colspan="7">Loading...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        async function fetchShops() {
+            const res = await fetch('/api/control/shops');
+            const shops = await res.json();
+            const tbody = document.getElementById('shop-list');
+            
+            if (shops.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7">Waiting for shop telemetry...</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = shops.map(shop => {
+                const isOnline = shop.isOnline;
+                const statusClass = shop.status === 'revoked' ? 'status-revoked' : (isOnline ? 'status-online' : 'status-offline');
+                const statusText = shop.status === 'revoked' ? 'REVOKED' : (isOnline ? 'ONLINE' : 'OFFLINE');
+                const hb = shop.heartbeat || {};
+                
+                return `
+                    <tr>
+                        <td>${shop.shopId}</td>
+                        <td>${shop.name}</td>
+                        <td class="${statusClass}">${statusText}</td>
+                        <td>${hb.version || '-'}</td>
+                        <td>${hb.uptime ? (hb.uptime / 3600).toFixed(1) + 'h' : '-'}</td>
+                        <td>${hb.lastSeen ? new Date(hb.lastSeen).toLocaleString() : '-'}</td>
+                        <td>
+                            ${shop.status !== 'revoked' ? \`<button class="btn-danger" onclick="revokeShop('\${shop.shopId}')">Revoke</button>\` : 'Revoked'}
+                            ${isOnline ? \`<button onclick="sendCommand('\${shop.shopId}', 'restart')">Restart</button>\` : ''}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        async function revokeShop(shopId) {
+            if (!confirm('Are you sure you want to revoke this shop?')) return;
+            await fetch('/api/admin/revoke', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ shopId })
+            });
+            fetchShops();
+        }
+
+        async function sendCommand(shopId, command) {
+            await fetch('/api/control/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ shopId, command })
+            });
+            alert('Command sent');
+        }
+
+        fetchShops();
+        setInterval(fetchShops, 5000);
+    </script>
+</body>
+</html>

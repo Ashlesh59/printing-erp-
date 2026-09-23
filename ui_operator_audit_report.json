@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-22T17:04:14.777Z",
+  "timestamp": "2026-09-22T18:24:55.778Z",
   "passed": [
     {
       "feature": "Shop Mode Entry",
@@ -11,23 +11,23 @@
     },
     {
       "feature": "Customer Creation API",
-      "detail": "Created customer ID: [object Object]"
+      "detail": "Created customer ID: 2"
     },
     {
       "feature": "Order Pipeline Execution",
-      "detail": "Order created successfully with ID: [object Object]"
+      "detail": "Order created successfully with ID: 99905"
     },
     {
       "feature": "Inventory Database Sync",
-      "detail": "Retrieved undefined inventory stock items."
+      "detail": "Retrieved 13 inventory stock items."
     },
     {
       "feature": "Customer CRM Database Sync",
-      "detail": "Retrieved undefined active customer profiles."
+      "detail": "Retrieved 2 active customer profiles."
     },
     {
       "feature": "Order History CRM Sync",
-      "detail": "Retrieved undefined historical billing orders."
+      "detail": "Retrieved 7 historical billing orders."
     },
     {
       "feature": "Doc Studio Storage Engine",
@@ -39,7 +39,7 @@
     },
     {
       "feature": "Hardware & Settings Engine",
-      "detail": "Connected printers: undefined, pricing matrix loaded, license verified."
+      "detail": "Connected printers: 2, pricing matrix loaded, license verified."
     }
   ],
   "uiBreaks": [],

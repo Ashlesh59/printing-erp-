@@ -18,7 +18,8 @@
     "test:all": "electron test_phase1_security.js && electron test_phase2_lifecycle.js && electron test_phase3_printing.js && electron test_phase4_inventory.js && electron test_phase5_purchasing.js && electron test_phase6_hardening.js && electron test_phase6_3_auth.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "test:production-readiness": "node test_production_readiness.js"
   },
   "build": {
     "appId": "com.printshop.manager",

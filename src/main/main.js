@@ -1341,10 +1341,6 @@ app.whenReady().then(() => {
   });
 });
 
-ipcMain.handle('get-server-info', async () => {
-    return getServerInfo();
-});
-
 app.on('window-all-closed', function () {
   try {
     const { stopServer } = require('./server');

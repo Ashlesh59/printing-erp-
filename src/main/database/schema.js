@@ -220,7 +220,7 @@ function initDatabase() {
             default_printer TEXT,
             bw_price_per_page REAL DEFAULT 2.0,
             color_price_per_page REAL DEFAULT 10.0,
-            cloud_url TEXT DEFAULT 'http://localhost:8080',
+            cloud_url TEXT,
             shop_id TEXT,
             supabase_key TEXT,
             vercel_url TEXT,
@@ -241,7 +241,7 @@ function initDatabase() {
 
     // Migrations for existing databases — safe to run repeatedly
     const settingsMigrations = [
-        `ALTER TABLE settings ADD COLUMN cloud_url TEXT DEFAULT 'http://localhost:8080'`,
+        `ALTER TABLE settings ADD COLUMN cloud_url TEXT`,
         `ALTER TABLE settings ADD COLUMN shop_id TEXT`,
         `ALTER TABLE settings ADD COLUMN supabase_key TEXT`,
         `ALTER TABLE settings ADD COLUMN vercel_url TEXT`,
