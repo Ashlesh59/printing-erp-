@@ -12,3 +12,5 @@ cloud-server/uploads/*
 !cloud-server/uploads/.gitkeep
 PrintSimulator/*.pdf
 cloud-server/*.db
+cloud-server/*.db-wal
+cloud-server/*.db-shm
