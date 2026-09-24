@@ -9,6 +9,9 @@ const Database = require('better-sqlite3');
 
 const app = express();
 
+// Trust reverse proxy (Nginx, Caddy, Cloudflare, AWS ALB) for accurate client IP in req.ip
+app.enable('trust proxy');
+
 // Security Response Headers
 app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -18,15 +21,25 @@ app.use((req, res, next) => {
     next();
 });
 
+// Environment Configuration with Sensible Defaults
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const HOST = process.env.CONTROL_CENTER_HOST || '0.0.0.0';
+const PORT = parseInt(process.env.CONTROL_CENTER_PORT || process.env.PORT || '5000', 10);
+const ENROLLMENT_KEY_TTL = parseInt(process.env.ENROLLMENT_KEY_TTL, 10) || (24 * 60 * 60 * 1000); // Default: 24h
+const AUTH_SECRET = process.env.AUTH_SECRET || process.env.CONTROL_CENTER_SECRET || null;
+const COMMAND_SIGNING_SECRET = process.env.COMMAND_SIGNING_SECRET || null;
+
 // Dynamic CORS configuration
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
     ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()) 
-    : ['*'];
+    : (NODE_ENV === 'production' ? ['https://control.desksolutions.in', 'https://desksolutions.in'] : ['*']);
 
 app.use(cors({
     origin: (origin, callback) => {
         if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
             callback(null, true);
+        } else if (NODE_ENV === 'production') {
+            callback(new Error(`Origin ${origin} not allowed by CORS`));
         } else {
             callback(null, true); // Permissive for local development & API access
         }
@@ -37,12 +50,16 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-const PORT = process.env.PORT || 5000;
 const dbFile = process.env.DB_PATH 
-    ? (path.isAbsolute(process.env.DB_PATH) ? process.env.DB_PATH : path.join(__dirname, '..', process.env.DB_PATH))
+    ? (path.isAbsolute(process.env.DB_PATH) ? process.env.DB_PATH : path.resolve(process.cwd(), process.env.DB_PATH))
     : path.join(__dirname, 'cloud_control.db');
 
-const uploadsDir = path.join(__dirname, 'uploads');
+const dbDir = path.dirname(dbFile);
+if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+
+const uploadsDir = process.env.UPLOADS_DIR 
+    ? (path.isAbsolute(process.env.UPLOADS_DIR) ? process.env.UPLOADS_DIR : path.resolve(process.cwd(), process.env.UPLOADS_DIR))
+    : path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
 // Setup SQLite with Full Persistence Schema
@@ -137,18 +154,6 @@ db.exec(`
         lastChecked INTEGER,
         error TEXT
     );
-    CREATE TABLE IF NOT EXISTS pending_orders (
-        id TEXT PRIMARY KEY,
-        shopId TEXT,
-        name TEXT,
-        phone TEXT,
-        printType TEXT,
-        paperSize TEXT,
-        fileName TEXT,
-        originalName TEXT,
-        filePath TEXT,
-        timestamp INTEGER
-    );
 `);
 
 // Automatic schema migrations for existing databases
@@ -165,6 +170,29 @@ try { db.exec('ALTER TABLE remote_commands ADD COLUMN nonce TEXT;'); } catch(e) 
 try { db.exec('ALTER TABLE remote_commands ADD COLUMN signature TEXT;'); } catch(e) {}
 try { db.exec('ALTER TABLE remote_commands ADD COLUMN ackedAt INTEGER;'); } catch(e) {}
 try { db.exec('ALTER TABLE remote_commands ADD COLUMN executedAt INTEGER;'); } catch(e) {}
+
+// Database Performance Indexes (optimizes 24/7 lookups and prevents full-table scans)
+try {
+    db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_alerts_shop_status ON alerts(shopId, status);
+        CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_audit_shop_ts ON audit_logs(shopId, timestamp);
+        CREATE INDEX IF NOT EXISTS idx_commands_shop_ts ON remote_commands(shopId, timestamp);
+        CREATE INDEX IF NOT EXISTS idx_commands_status ON remote_commands(status);
+        CREATE INDEX IF NOT EXISTS idx_diagnostics_shop_ts ON diagnostics(shopId, timestamp);
+        CREATE INDEX IF NOT EXISTS idx_errors_shop_ts ON errors(shopId, timestamp);
+    `);
+} catch(e) {
+    console.warn('[DB] Index creation notice:', e.message);
+}
+
+// Database Backups Directory
+const backupsDir = process.env.BACKUPS_DIR || process.env.BACKUP_PATH
+    ? (path.isAbsolute(process.env.BACKUPS_DIR || process.env.BACKUP_PATH)
+        ? (process.env.BACKUPS_DIR || process.env.BACKUP_PATH)
+        : path.resolve(process.cwd(), process.env.BACKUPS_DIR || process.env.BACKUP_PATH))
+    : path.join(__dirname, 'backups');
+if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true });
 
 // Helpers
 function logAudit(shopId, action, actor, details, ip = '127.0.0.1') {
@@ -210,15 +238,49 @@ function createAlert(shopId, type, severity, message, details = '') {
     }
 }
 
+// Admin Authentication Middleware (guards administrative and control endpoints)
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY || AUTH_SECRET || null;
+
+function requireAdminAuth(req, res, next) {
+    if (!ADMIN_API_KEY) {
+        if (NODE_ENV === 'production') {
+            console.error('[Security] Blocked unauthenticated admin request in production: No ADMIN_API_KEY or AUTH_SECRET configured.');
+            return res.status(500).json({ success: false, error: 'Server misconfiguration: Admin authentication secret required in production' });
+        }
+        // In local development or test mode without configured secret, allow access
+        return next();
+    }
+
+    const authHeader = req.headers['authorization'] || '';
+    const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : null;
+    const customHeader = req.headers['x-admin-key'] || req.headers['x-admin-secret'] || null;
+    const queryKey = req.query ? req.query.admin_key : null;
+
+    const providedKey = bearerToken || customHeader || queryKey;
+    if (!providedKey) {
+        logAudit('GLOBAL', 'ADMIN_AUTH_FAILED', 'ANONYMOUS', `Missing credentials on ${req.method} ${req.path}`, req.ip);
+        return res.status(401).json({ success: false, error: 'Authentication required: Missing admin key' });
+    }
+
+    const keyBuf = Buffer.from(String(providedKey));
+    const expectedBuf = Buffer.from(String(ADMIN_API_KEY));
+    if (keyBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(keyBuf, expectedBuf)) {
+        logAudit('GLOBAL', 'ADMIN_AUTH_FAILED', 'ANONYMOUS', `Invalid admin key on ${req.method} ${req.path}`, req.ip);
+        return res.status(401).json({ success: false, error: 'Unauthorized: Invalid admin credentials' });
+    }
+
+    next();
+}
+
 // ──────────────────────────────────────────────────────────────
 //  Admin & Enrollment APIs
 // ──────────────────────────────────────────────────────────────
 
-app.post('/api/admin/keys', (req, res) => {
+app.post('/api/admin/keys', requireAdminAuth, (req, res) => {
     try {
         const key = 'DK-' + crypto.randomBytes(4).toString('hex').toUpperCase();
         const createdAt = Date.now();
-        const expiresAt = createdAt + 24 * 60 * 60 * 1000; // 24 hours
+        const expiresAt = createdAt + ENROLLMENT_KEY_TTL;
         
         db.prepare('INSERT INTO enrollment_keys (key, createdAt, expiresAt, used, revoked) VALUES (?, ?, ?, 0, 0)')
           .run(key, createdAt, expiresAt);
@@ -230,7 +292,7 @@ app.post('/api/admin/keys', (req, res) => {
     }
 });
 
-app.get('/api/admin/keys', (req, res) => {
+app.get('/api/admin/keys', requireAdminAuth, (req, res) => {
     try {
         const keys = db.prepare('SELECT * FROM enrollment_keys ORDER BY createdAt DESC LIMIT 50').all();
         const now = Date.now();
@@ -245,10 +307,10 @@ app.get('/api/admin/keys', (req, res) => {
     }
 });
 
-app.post('/api/admin/keys/revoke', (req, res) => {
+app.post('/api/admin/keys/revoke', requireAdminAuth, (req, res) => {
     try {
-        const { key } = req.body;
-        if (!key) return res.status(400).json({ success: false, message: 'Key is required' });
+        const { key } = req.body || {};
+        if (!key || typeof key !== 'string') return res.status(400).json({ success: false, message: 'Valid key is required' });
         
         const row = db.prepare('SELECT * FROM enrollment_keys WHERE key = ?').get(key);
         if (!row) return res.status(404).json({ success: false, message: 'Key not found' });
@@ -256,6 +318,52 @@ app.post('/api/admin/keys/revoke', (req, res) => {
         db.prepare('UPDATE enrollment_keys SET revoked = 1 WHERE key = ?').run(key);
         logAudit('GLOBAL', 'ENROLLMENT_KEY_REVOKED', 'ADMIN', `Key: ${key}`, req.ip);
         res.json({ success: true, message: 'Key revoked successfully' });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// Database Online Backup APIs (WAL-safe backup without server interruption)
+app.post('/api/admin/backup', requireAdminAuth, async (req, res) => {
+    try {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const backupFileName = `cloud_control_backup_${timestamp}.db`;
+        const backupPath = path.join(backupsDir, backupFileName);
+
+        await db.backup(backupPath);
+        const stats = fs.statSync(backupPath);
+        
+        logAudit('GLOBAL', 'DATABASE_BACKUP_CREATED', 'ADMIN', `Backup created: ${backupFileName} (${stats.size} bytes)`, req.ip);
+        res.json({
+            success: true,
+            backupFile: backupFileName,
+            sizeBytes: stats.size,
+            timestamp: Date.now()
+        });
+    } catch (e) {
+        console.error('[Backup] Failed to create database backup:', e);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.get('/api/admin/backups', requireAdminAuth, (req, res) => {
+    try {
+        if (!fs.existsSync(backupsDir)) {
+            return res.json({ success: true, backups: [] });
+        }
+        const files = fs.readdirSync(backupsDir)
+            .filter(f => f.endsWith('.db'))
+            .map(f => {
+                const stat = fs.statSync(path.join(backupsDir, f));
+                return {
+                    name: f,
+                    sizeBytes: stat.size,
+                    createdAt: stat.mtimeMs
+                };
+            })
+            .sort((a, b) => b.createdAt - a.createdAt);
+
+        res.json({ success: true, backups: files });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
@@ -316,6 +424,21 @@ app.post('/api/enroll', (req, res) => {
 //  Health & Overview API
 // ──────────────────────────────────────────────────────────────
 
+// Standard container / load balancer liveness probe
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', uptime: Math.round(process.uptime()), timestamp: Date.now() });
+});
+
+// Container / orchestrator readiness probe (verifies database query execution)
+app.get('/ready', (req, res) => {
+    try {
+        db.prepare('SELECT 1').get();
+        res.json({ status: 'ready', database: 'connected', timestamp: Date.now() });
+    } catch (e) {
+        res.status(503).json({ status: 'not_ready', database: 'error', error: e.message });
+    }
+});
+
 app.get('/api/health', (req, res) => {
     try {
         const totalShops = db.prepare('SELECT count(*) as count FROM shops').get().count;
@@ -341,7 +464,7 @@ app.get('/api/health', (req, res) => {
 //  Control Center Fleet Monitoring & Shop Inspection APIs
 // ──────────────────────────────────────────────────────────────
 
-app.get('/api/control/shops', (req, res) => {
+app.get('/api/control/shops', requireAdminAuth, (req, res) => {
     try {
         const shops = db.prepare('SELECT * FROM shops ORDER BY registeredAt DESC').all();
         const heartbeats = db.prepare('SELECT * FROM heartbeats').all();
@@ -383,7 +506,7 @@ app.get('/api/control/shops', (req, res) => {
     }
 });
 
-app.get('/api/control/shop/:shopId', (req, res) => {
+app.get('/api/control/shop/:shopId', requireAdminAuth, (req, res) => {
     try {
         const { shopId } = req.params;
         const shop = db.prepare('SELECT shopId, name, registeredAt, status, metadata FROM shops WHERE shopId = ?').get(shopId);
@@ -414,9 +537,11 @@ app.get('/api/control/shop/:shopId', (req, res) => {
     }
 });
 
-app.post('/api/admin/revoke', (req, res) => {
+app.post('/api/admin/revoke', requireAdminAuth, (req, res) => {
     try {
-        const { shopId } = req.body;
+        const { shopId } = req.body || {};
+        if (!shopId || typeof shopId !== 'string') return res.status(400).json({ success: false, error: 'Valid shopId is required' });
+        
         const shop = db.prepare('SELECT * FROM shops WHERE shopId = ?').get(shopId);
         if (!shop) return res.status(404).json({ success: false, error: 'Shop not found' });
         
@@ -458,11 +583,11 @@ const ALLOWED_COMMANDS = new Set([
     'clear_cache'
 ]);
 
-app.post('/api/control/command', (req, res) => {
+app.post('/api/control/command', requireAdminAuth, (req, res) => {
     try {
-        const { shopId, command } = req.body;
-        if (!shopId || !command) {
-            return res.status(400).json({ success: false, message: 'shopId and command are required' });
+        const { shopId, command } = req.body || {};
+        if (!shopId || typeof shopId !== 'string' || !command || typeof command !== 'string') {
+            return res.status(400).json({ success: false, message: 'shopId and command must be strings' });
         }
 
         // Strict capability whitelist validation
@@ -485,9 +610,14 @@ app.post('/api/control/command', (req, res) => {
         const expiresAt = timestamp + 5 * 60 * 1000; // 5 min TTL
         const nonce = crypto.randomBytes(8).toString('hex');
         
-        // Cryptographic Signature Generation: HMAC-SHA256(command:commandId:timestamp)
-        const payload = `${command}:${commandId}:${timestamp}`;
-        const signature = crypto.createHmac('sha256', shop.token || 'default-token')
+        // Cryptographic Signature Generation: HMAC-SHA256(command:commandId:timestamp:nonce)
+        const payload = `${command}:${commandId}:${timestamp}:${nonce}`;
+        const signingKey = shop.token || COMMAND_SIGNING_SECRET;
+        if (!signingKey) {
+            logAudit(shopId, 'COMMAND_REJECTED', 'ADMIN', 'No signing key available for shop', req.ip);
+            return res.status(500).json({ success: false, message: 'No cryptographic signing key configured for shop' });
+        }
+        const signature = crypto.createHmac('sha256', signingKey)
                                 .update(payload)
                                 .digest('hex');
 
@@ -524,7 +654,7 @@ app.post('/api/control/command', (req, res) => {
     }
 });
 
-app.get('/api/control/commands', (req, res) => {
+app.get('/api/control/commands', requireAdminAuth, (req, res) => {
     try {
         const { shopId } = req.query;
         let commands;
@@ -543,7 +673,7 @@ app.get('/api/control/commands', (req, res) => {
 //  Alerts & Notifications APIs
 // ──────────────────────────────────────────────────────────────
 
-app.get('/api/control/alerts', (req, res) => {
+app.get('/api/control/alerts', requireAdminAuth, (req, res) => {
     try {
         const { shopId, status, severity } = req.query;
         let query = 'SELECT * FROM alerts WHERE 1=1';
@@ -561,7 +691,7 @@ app.get('/api/control/alerts', (req, res) => {
     }
 });
 
-app.post('/api/control/alerts/:id/ack', (req, res) => {
+app.post('/api/control/alerts/:id/ack', requireAdminAuth, (req, res) => {
     try {
         const { id } = req.params;
         db.prepare("UPDATE alerts SET status = 'acknowledged' WHERE id = ?").run(id);
@@ -572,7 +702,7 @@ app.post('/api/control/alerts/:id/ack', (req, res) => {
     }
 });
 
-app.post('/api/control/alerts/:id/resolve', (req, res) => {
+app.post('/api/control/alerts/:id/resolve', requireAdminAuth, (req, res) => {
     try {
         const { id } = req.params;
         db.prepare("UPDATE alerts SET status = 'resolved', resolvedAt = ? WHERE id = ?").run(Date.now(), id);
@@ -587,7 +717,7 @@ app.post('/api/control/alerts/:id/resolve', (req, res) => {
 //  Diagnostics, Audit & Update APIs
 // ──────────────────────────────────────────────────────────────
 
-app.get('/api/control/audit', (req, res) => {
+app.get('/api/control/audit', requireAdminAuth, (req, res) => {
     try {
         const { shopId } = req.query;
         let logs;
@@ -602,7 +732,7 @@ app.get('/api/control/audit', (req, res) => {
     }
 });
 
-app.get('/api/control/diagnostics/:shopId', (req, res) => {
+app.get('/api/control/diagnostics/:shopId', requireAdminAuth, (req, res) => {
     try {
         const { shopId } = req.params;
         const diags = db.prepare('SELECT * FROM diagnostics WHERE shopId = ? ORDER BY timestamp DESC LIMIT 20').all(shopId);
@@ -612,7 +742,7 @@ app.get('/api/control/diagnostics/:shopId', (req, res) => {
     }
 });
 
-app.get('/api/control/errors', (req, res) => {
+app.get('/api/control/errors', requireAdminAuth, (req, res) => {
     try {
         const { shopId } = req.query;
         let errors;
@@ -627,7 +757,7 @@ app.get('/api/control/errors', (req, res) => {
     }
 });
 
-app.get('/api/control/updates', (req, res) => {
+app.get('/api/control/updates', requireAdminAuth, (req, res) => {
     try {
         const updates = db.prepare('SELECT * FROM updates').all();
         res.json(updates);
@@ -640,7 +770,7 @@ app.get('/api/control/updates', (req, res) => {
 //  Co-Pilot Operational Intelligence API (Real DB Queries)
 // ──────────────────────────────────────────────────────────────
 
-app.post('/api/copilot/query', (req, res) => {
+app.post('/api/copilot/query', requireAdminAuth, (req, res) => {
     try {
         const queryText = (req.body.query || '').trim().toLowerCase();
         const now = Date.now();
@@ -778,11 +908,20 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ──────────────────────────────────────────────────────────────
 
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server, path: '/v1/telemetry' });
+const wss = new WebSocket.Server({ 
+    server, 
+    path: '/v1/telemetry',
+    maxPayload: 1024 * 1024 // 1 MB limit prevents memory exhaustion attacks
+});
 const wsClients = new Map(); // shopId -> WebSocket
 
 wss.on('connection', (ws, req) => {
     let connectedShopId = null;
+
+    // Attach immediate socket error listener to prevent uncaught exceptions crashing Node.js
+    ws.on('error', (err) => {
+        console.warn(`[WS] Socket error (${connectedShopId || 'unauthenticated'}):`, err.message);
+    });
 
     ws.on('message', (message) => {
         try {
@@ -806,6 +945,16 @@ wss.on('connection', (ws, req) => {
                     return;
                 }
 
+                // If an existing socket is registered for this shop, close it cleanly to avoid stale socket conflicts
+                if (wsClients.has(shopId)) {
+                    const oldWs = wsClients.get(shopId);
+                    if (oldWs !== ws) {
+                        try {
+                            oldWs.close(1000, 'Superseded by new connection');
+                        } catch(e) {}
+                    }
+                }
+
                 connectedShopId = shopId;
                 wsClients.set(shopId, ws);
                 
@@ -827,6 +976,36 @@ wss.on('connection', (ws, req) => {
                   .run(Date.now(), shopId);
 
                 ws.send(JSON.stringify({ type: 'auth_success', shopId }));
+
+                // Dispatch any pending unexpired commands queued while shop was offline
+                try {
+                    const pendingCmds = db.prepare(`
+                        SELECT * FROM remote_commands 
+                        WHERE shopId = ? AND status = 'pending' AND expiresAt > ? 
+                        ORDER BY timestamp ASC
+                    `).all(shopId, Date.now());
+
+                    for (const cmd of pendingCmds) {
+                        ws.send(JSON.stringify({
+                            type: 'remote_command',
+                            id: cmd.id,
+                            command: cmd.command,
+                            timestamp: cmd.timestamp,
+                            expiresAt: cmd.expiresAt,
+                            nonce: cmd.nonce,
+                            signature: cmd.signature
+                        }));
+                        db.prepare("UPDATE remote_commands SET status = 'dispatched' WHERE id = ?").run(cmd.id);
+                        logAudit(shopId, 'COMMAND_DISPATCHED_QUEUED', 'SYSTEM', `Queued command "${cmd.command}" [ID: ${cmd.id}] dispatched on connection`, req.socket.remoteAddress);
+                    }
+                    
+                    // Mark expired pending commands
+                    db.prepare("UPDATE remote_commands SET status = 'expired' WHERE shopId = ? AND status = 'pending' AND expiresAt <= ?")
+                      .run(shopId, Date.now());
+                } catch (e) {
+                    console.error('[WS] Queued command dispatch error:', e);
+                }
+
                 return;
             }
 
@@ -896,23 +1075,30 @@ wss.on('connection', (ws, req) => {
     ws.on('close', () => {
         if (connectedShopId) {
             logAudit(connectedShopId, 'SHOP_DISCONNECTED', 'SYSTEM', 'WebSocket connection closed', req.socket.remoteAddress);
-            wsClients.delete(connectedShopId);
+            // Only delete from wsClients if this socket instance is still the active registered socket
+            if (wsClients.get(connectedShopId) === ws) {
+                wsClients.delete(connectedShopId);
+            }
         }
     });
 });
 
-// Periodic Offline Detector (Every 30s)
+// Periodic Offline Detector (Every 30s) — Accurately ignores brand new shops that enrolled < 10m ago
 setInterval(() => {
     try {
         const threshold = Date.now() - 600000; // 10 minutes
-        const activeShops = db.prepare("SELECT shopId, name FROM shops WHERE status = 'active'").all();
+        const activeShops = db.prepare("SELECT shopId, name, registeredAt FROM shops WHERE status = 'active'").all();
         const heartbeats = db.prepare("SELECT * FROM heartbeats").all();
 
         for (const shop of activeShops) {
             const hb = heartbeats.find(h => h.shopId === shop.shopId);
-            if (!hb || hb.lastSeen < threshold) {
-                // If shop hasn't checked in recently and has no active offline alert
-                createAlert(shop.shopId, 'SHOP_OFFLINE', 'warning', `Shop "${shop.name}" is OFFLINE (No heartbeat for > 10m)`);
+            if (hb) {
+                if (hb.lastSeen < threshold) {
+                    createAlert(shop.shopId, 'SHOP_OFFLINE', 'warning', `Shop "${shop.name}" is OFFLINE (No heartbeat for > 10m)`);
+                }
+            } else if (shop.registeredAt && (Date.now() - shop.registeredAt > threshold)) {
+                // Only alert for un-checked-in shops if enrolled more than 10m ago
+                createAlert(shop.shopId, 'SHOP_OFFLINE', 'warning', `Shop "${shop.name}" has never connected since enrollment (> 10m ago)`);
             }
         }
     } catch (e) {
@@ -920,8 +1106,88 @@ setInterval(() => {
     }
 }, 30000);
 
-server.listen(PORT, () => {
-    console.log(`DeskSolutions Control Center Server running on port ${PORT}`);
+// 24/7 Database Maintenance & Table Bounding (Prunes logs older than retention windows and runs optimize)
+function runDatabaseMaintenance() {
+    try {
+        const now = Date.now();
+        const ninetyDaysAgo = now - (90 * 24 * 60 * 60 * 1000);
+        const sixtyDaysAgo = now - (60 * 24 * 60 * 60 * 1000);
+        const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
+
+        const auditPrune = db.prepare('DELETE FROM audit_logs WHERE timestamp < ?').run(ninetyDaysAgo);
+        const alertPrune = db.prepare("DELETE FROM alerts WHERE status = 'resolved' AND timestamp < ?").run(sixtyDaysAgo);
+        const diagPrune = db.prepare('DELETE FROM diagnostics WHERE timestamp < ?').run(thirtyDaysAgo);
+        const errPrune = db.prepare('DELETE FROM errors WHERE timestamp < ?').run(thirtyDaysAgo);
+        const cmdExpire = db.prepare("UPDATE remote_commands SET status = 'expired' WHERE status = 'pending' AND expiresAt <= ?").run(now);
+
+        db.pragma('optimize');
+
+        // Automated backup retention pruning (Default: 30 days retention, keeps at least 5 backups)
+        const BACKUP_RETENTION_DAYS = parseInt(process.env.BACKUP_RETENTION_DAYS || '30', 10);
+        if (fs.existsSync(backupsDir)) {
+            const backupCutoff = now - (BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+            const backupFiles = fs.readdirSync(backupsDir).filter(f => f.endsWith('.db'));
+            if (backupFiles.length > 5) {
+                let prunedCount = 0;
+                backupFiles.forEach(file => {
+                    const filePath = path.join(backupsDir, file);
+                    try {
+                        const stat = fs.statSync(filePath);
+                        if (stat.mtimeMs < backupCutoff) {
+                            fs.unlinkSync(filePath);
+                            prunedCount++;
+                        }
+                    } catch (e) {}
+                });
+                if (prunedCount > 0) {
+                    console.log(`[Maintenance] Pruned ${prunedCount} database backup(s) older than ${BACKUP_RETENTION_DAYS} days.`);
+                }
+            }
+        }
+
+        if (auditPrune.changes || alertPrune.changes || diagPrune.changes || errPrune.changes || cmdExpire.changes) {
+            console.log(`[Maintenance] Pruned ${auditPrune.changes} audit logs, ${alertPrune.changes} alerts, ${diagPrune.changes} diags, ${errPrune.changes} errors, expired ${cmdExpire.changes} commands.`);
+        }
+    } catch (e) {
+        console.error('[Maintenance] Database maintenance error:', e.message);
+    }
+}
+setTimeout(runDatabaseMaintenance, 5000);
+setInterval(runDatabaseMaintenance, 24 * 60 * 60 * 1000);
+
+server.listen(PORT, HOST, () => {
+    console.log(`DeskSolutions Control Center Server running on ${HOST}:${PORT}`);
 });
+
+// Graceful shutdown handling for container environments (Docker/Kubernetes/Railway)
+function gracefulShutdown(signal) {
+    console.log(`[Server] Received ${signal}. Starting graceful shutdown...`);
+    for (const [shopId, ws] of wsClients.entries()) {
+        try {
+            ws.send(JSON.stringify({ type: 'server_shutdown', reason: 'Control Center restarting' }));
+            ws.close();
+        } catch (e) {}
+    }
+    wsClients.clear();
+
+    server.close(() => {
+        console.log('[Server] HTTP and WebSocket listeners closed.');
+        try {
+            db.close();
+            console.log('[Server] SQLite database connection closed cleanly.');
+        } catch (e) {
+            console.error('[Server] Error closing database:', e.message);
+        }
+        process.exit(0);
+    });
+
+    setTimeout(() => {
+        console.error('[Server] Graceful shutdown timed out. Forcing exit.');
+        process.exit(1);
+    }, 5000).unref();
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 module.exports = server;

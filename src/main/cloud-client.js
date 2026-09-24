@@ -27,12 +27,12 @@ class CloudClient {
         this.loadConfig();
         
         this.ws = null;
-        this.cloudUrl = process.env.CLOUD_MASTER_URL || 'wss://control.desksolutions.in/v1/telemetry';
+        this.cloudUrl = process.env.CONTROL_CENTER_WS_URL || process.env.CLOUD_MASTER_URL || this.cloudUrl || 'wss://control.desksolutions.in/v1/telemetry';
         this.version = electronApp && typeof electronApp.getVersion === 'function' ? electronApp.getVersion() : '1.0.0';
         this.sentryDsn = process.env.SENTRY_DSN || null;
         this.reconnectAttempts = 0;
         this.maxReconnectDelay = 300000; // 5 mins max backoff
-        this.executedCommands = new Set();
+        this.executedCommands = new Map(); // id -> execution timestamp (bounded memory)
         this.reconnectTimer = null;
         this.heartbeatTimer = null;
     }
@@ -41,17 +41,21 @@ class CloudClient {
         try {
             if (fs.existsSync(this.configPath)) {
                 const data = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
+                // Invariant: Permanent Shop ID and auth token are strictly preserved
                 this.shopId = data.shopId || process.env.SHOP_ID || 'UNCONFIGURED-SHOP';
                 this.authToken = data.authToken || process.env.SHOP_AUTH_TOKEN || null;
-                this.cloudUrl = data.cloudUrl || process.env.CLOUD_MASTER_URL || this.cloudUrl;
+                // Precedence: explicit environment URL > saved config URL > production default
+                this.cloudUrl = process.env.CONTROL_CENTER_WS_URL || process.env.CLOUD_MASTER_URL || data.cloudUrl || 'wss://control.desksolutions.in/v1/telemetry';
             } else {
                 this.shopId = process.env.SHOP_ID || 'UNCONFIGURED-SHOP';
                 this.authToken = process.env.SHOP_AUTH_TOKEN || null;
+                this.cloudUrl = process.env.CONTROL_CENTER_WS_URL || process.env.CLOUD_MASTER_URL || 'wss://control.desksolutions.in/v1/telemetry';
             }
         } catch (e) {
             console.error('[CloudClient] Failed to load cloud config:', e);
             this.shopId = 'UNCONFIGURED-SHOP';
             this.authToken = null;
+            this.cloudUrl = process.env.CONTROL_CENTER_WS_URL || process.env.CLOUD_MASTER_URL || 'wss://control.desksolutions.in/v1/telemetry';
         }
     }
 
@@ -89,7 +93,7 @@ class CloudClient {
 
     async enroll(key, shopName, serverUrl) {
         try {
-            const baseUrl = (serverUrl || process.env.CLOUD_SERVER_URL || 'https://control.desksolutions.in').replace(/\/$/, '');
+            const baseUrl = (serverUrl || process.env.CONTROL_CENTER_PUBLIC_URL || process.env.CLOUD_SERVER_URL || 'https://control.desksolutions.in').replace(/\/$/, '');
             const url = `${baseUrl}/api/enroll`;
             
             const response = await globalThis.fetch(url, {
@@ -390,15 +394,29 @@ class CloudClient {
             return false;
         }
 
+        // Anti-Replay: Prevent future-dated timestamp drift (> 1 minute ahead)
+        if (msg.timestamp > Date.now() + 60 * 1000) {
+            console.error('[CloudClient] Command rejected: Future timestamp detected');
+            return false;
+        }
+
         // Anti-Replay: Check if already executed
         if (this.executedCommands.has(msg.id)) {
             console.error('[CloudClient] Command rejected: Replay attack detected for command ID', msg.id);
             return false;
         }
 
-        // Cryptographic Verification: HMAC-SHA256(command:id:timestamp)
-        const payload = `${msg.command}:${msg.id}:${msg.timestamp}`;
-        const expectedSignature = crypto.createHmac('sha256', this.authToken || 'default-token')
+        // Cryptographic Verification: HMAC-SHA256(command:id:timestamp:nonce) with backward-compatibility fallback
+        const payload = msg.nonce 
+            ? `${msg.command}:${msg.id}:${msg.timestamp}:${msg.nonce}`
+            : `${msg.command}:${msg.id}:${msg.timestamp}`;
+
+        const signingKey = this.authToken || process.env.COMMAND_SIGNING_SECRET;
+        if (!signingKey) {
+            console.error('[CloudClient] Command rejected: No authentication token configured');
+            return false;
+        }
+        const expectedSignature = crypto.createHmac('sha256', signingKey)
                                         .update(payload)
                                         .digest('hex');
                                         
@@ -407,7 +425,17 @@ class CloudClient {
             return false;
         }
 
-        this.executedCommands.add(msg.id);
+        // Record execution timestamp in map
+        this.executedCommands.set(msg.id, Date.now());
+
+        // Bounded memory cleanup: prune entries older than 10 minutes
+        const cutoff = Date.now() - 10 * 60 * 1000;
+        for (const [id, ts] of this.executedCommands.entries()) {
+            if (ts < cutoff) {
+                this.executedCommands.delete(id);
+            }
+        }
+
         return true;
     }
 }

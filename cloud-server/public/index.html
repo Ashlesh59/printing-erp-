@@ -377,6 +377,7 @@
             <span class="brand-badge">Co-Pilot 24/7</span>
         </div>
         <div class="header-status">
+            <button class="btn btn-sm btn-secondary" id="admin-auth-btn" onclick="promptAdminKey()">🔑 Admin Key</button>
             <span><span class="pulse-dot"></span> System Live</span>
             <span id="header-time"></span>
         </div>
@@ -390,6 +391,7 @@
         <button class="tab-btn" onclick="switchTab('diagnostics')">Diagnostics & Errors</button>
         <button class="tab-btn" onclick="switchTab('audit')">Audit & Commands</button>
         <button class="tab-btn" onclick="switchTab('copilot')">Co-Pilot Intelligence</button>
+        <button class="tab-btn" onclick="switchTab('backups')">Backups</button>
     </nav>
 
     <main>
@@ -599,6 +601,31 @@
                 </div>
             </div>
         </div>
+
+        <!-- Tab 8: Backups -->
+        <div id="tab-backups" class="tab-pane">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Live SQLite Database Backups (WAL-Safe)</h2>
+                    <button class="btn" onclick="triggerBackup()">+ Create Live Backup</button>
+                </div>
+                <p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 14px;">
+                    Hot snapshots are created non-blockingly using SQLite's online backup API without interrupting active WebSocket telemetry.
+                </p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Backup Filename</th>
+                            <th>Size</th>
+                            <th>Created At</th>
+                        </tr>
+                    </thead>
+                    <tbody id="backups-tbody">
+                        <tr><td colspan="3">Loading backups...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </main>
 
     <!-- Shop Details Modal -->
@@ -614,12 +641,55 @@
 
     <script>
         let cachedShops = [];
+        let adminApiKey = sessionStorage.getItem('control_admin_key') || '';
 
         function updateClock() {
             document.getElementById('header-time').innerText = new Date().toLocaleTimeString();
         }
         setInterval(updateClock, 1000);
         updateClock();
+
+        function promptAdminKey(customMsg) {
+            const promptMsg = customMsg || 'Enter Founder/Admin Secret Key for Control Center:';
+            const key = prompt(promptMsg, adminApiKey || '');
+            if (key !== null) {
+                adminApiKey = key.trim();
+                sessionStorage.setItem('control_admin_key', adminApiKey);
+                updateAdminAuthBtn();
+                refreshData();
+            }
+        }
+
+        function updateAdminAuthBtn() {
+            const btn = document.getElementById('admin-auth-btn');
+            if (btn) {
+                if (adminApiKey) {
+                    btn.innerText = '🔑 Key Set';
+                    btn.style.color = 'var(--success)';
+                } else {
+                    btn.innerText = '🔑 Admin Key';
+                    btn.style.color = 'var(--text-main)';
+                }
+            }
+        }
+        updateAdminAuthBtn();
+
+        async function apiFetch(url, options = {}) {
+            options.headers = options.headers || {};
+            if (adminApiKey) {
+                options.headers['X-Admin-Key'] = adminApiKey;
+            }
+            try {
+                const res = await fetch(url, options);
+                if (res.status === 401) {
+                    promptAdminKey('Authentication required. Enter Admin API Key:');
+                }
+                return res;
+            } catch (err) {
+                console.error('[API Fetch Error]', err);
+                throw err;
+            }
+        }
 
         function switchTab(tabId) {
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -635,16 +705,17 @@
             if (tabId === 'alerts') loadAlerts();
             if (tabId === 'diagnostics') loadErrors();
             if (tabId === 'audit') loadAudit();
+            if (tabId === 'backups') loadBackups();
         }
 
         async function fetchHealth() {
             try {
-                const res = await fetch('/api/health');
+                const res = await apiFetch('/api/health');
                 const data = await res.json();
-                document.getElementById('m-total-shops').innerText = data.shops;
-                document.getElementById('m-online-shops').innerText = data.onlineShops;
-                document.getElementById('m-offline-shops').innerText = data.offlineShops;
-                document.getElementById('m-active-alerts').innerText = data.activeAlerts;
+                document.getElementById('m-total-shops').innerText = data.shops ?? 0;
+                document.getElementById('m-online-shops').innerText = data.onlineShops ?? 0;
+                document.getElementById('m-offline-shops').innerText = data.offlineShops ?? 0;
+                document.getElementById('m-active-alerts').innerText = data.activeAlerts ?? 0;
             } catch (e) {
                 console.error(e);
             }
@@ -652,18 +723,22 @@
 
         async function fetchShops() {
             try {
-                const res = await fetch('/api/control/shops');
-                cachedShops = await res.json();
+                const res = await apiFetch('/api/control/shops');
+                const data = await res.json();
+                cachedShops = Array.isArray(data) ? data : [];
                 renderOverview();
                 renderShops();
             } catch (e) {
                 console.error(e);
+                cachedShops = [];
+                renderOverview();
+                renderShops();
             }
         }
 
         function renderOverview() {
             const tbody = document.getElementById('overview-shops-tbody');
-            if (cachedShops.length === 0) {
+            if (!Array.isArray(cachedShops) || cachedShops.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No shops enrolled yet. Generate an enrollment key to connect installations.</td></tr>';
                 return;
             }
@@ -695,6 +770,11 @@
             const tbody = document.getElementById('shops-tbody');
             const search = (document.getElementById('shop-search')?.value || '').toLowerCase();
             const filter = document.getElementById('shop-status-filter')?.value || 'all';
+
+            if (!Array.isArray(cachedShops) || cachedShops.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No shops registered in fleet database.</td></tr>';
+                return;
+            }
 
             const filtered = cachedShops.filter(s => {
                 const matchesSearch = s.shopId.toLowerCase().includes(search) || s.name.toLowerCase().includes(search);
@@ -740,7 +820,7 @@
             body.innerHTML = 'Loading operational telemetry...';
 
             try {
-                const res = await fetch(`/api/control/shop/${shopId}`);
+                const res = await apiFetch(`/api/control/shop/${shopId}`);
                 const data = await res.json();
                 const hb = data.heartbeat || {};
 
@@ -771,6 +851,7 @@
                                 <option value="request_backup">Trigger Database Backup</option>
                                 <option value="check_updates">Check For Updates</option>
                                 <option value="reconnect">Force Cloud Reconnect</option>
+                                <option value="clear_cache">Clear System Cache</option>
                             </select>
                             <button class="btn" onclick="sendShopCommand('${shopId}')">Dispatch Command</button>
                         </div>
@@ -782,14 +863,14 @@
                             <tr><th>Command</th><th>Timestamp</th><th>Status</th><th>Result</th></tr>
                         </thead>
                         <tbody>
-                            ${(data.recentCommands || []).map(c => `
+                            ${(Array.isArray(data.recentCommands) && data.recentCommands.length > 0) ? data.recentCommands.map(c => `
                                 <tr>
                                     <td><strong>${c.command}</strong></td>
                                     <td>${new Date(c.timestamp).toLocaleTimeString()}</td>
                                     <td><span class="badge badge-info">${c.status}</span></td>
                                     <td><small>${c.result ? c.result.substring(0, 40) : '-'}</small></td>
                                 </tr>
-                            `).join('') || '<tr><td colspan="4">No recent commands.</td></tr>'}
+                            `).join('') : '<tr><td colspan="4">No recent commands.</td></tr>'}
                         </tbody>
                     </table>
                 `;
@@ -805,14 +886,17 @@
         async function sendShopCommand(shopId) {
             const command = document.getElementById('modal-cmd-select').value;
             try {
-                const res = await fetch('/api/control/command', {
+                const res = await apiFetch('/api/control/command', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ shopId, command })
                 });
                 const data = await res.json();
                 if (data.success) {
-                    alert(`Command "${command}" signed & dispatched successfully (ID: ${data.commandId})`);
+                    const statusText = data.dispatched 
+                        ? `Command "${command}" signed & dispatched immediately to active WebSocket (ID: ${data.commandId})`
+                        : `Command "${command}" signed & queued in database (Shop offline, will dispatch upon reconnect) (ID: ${data.commandId})`;
+                    alert(statusText);
                     openShopModal(shopId);
                 } else {
                     alert(`Failed to dispatch command: ${data.message || data.error}`);
@@ -824,7 +908,7 @@
 
         async function revokeShop(shopId) {
             if (!confirm(`Are you sure you want to revoke access for ${shopId}?`)) return;
-            await fetch('/api/admin/revoke', {
+            await apiFetch('/api/admin/revoke', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ shopId })
@@ -833,7 +917,7 @@
         }
 
         async function generateKey() {
-            const res = await fetch('/api/admin/keys', { method: 'POST' });
+            const res = await apiFetch('/api/admin/keys', { method: 'POST' });
             const data = await res.json();
             if (data.success) {
                 const banner = document.getElementById('new-key-banner');
@@ -844,10 +928,11 @@
         }
 
         async function loadKeys() {
-            const res = await fetch('/api/admin/keys');
+            const res = await apiFetch('/api/admin/keys');
             const data = await res.json();
             const tbody = document.getElementById('keys-tbody');
-            tbody.innerHTML = (data.keys || []).map(k => `
+            const keysList = Array.isArray(data.keys) ? data.keys : [];
+            tbody.innerHTML = keysList.map(k => `
                 <tr>
                     <td><strong style="font-family: monospace; color: #38bdf8;">${k.key}</strong></td>
                     <td><span class="badge ${k.status === 'ACTIVE' ? 'badge-online' : (k.status === 'USED' ? 'badge-info' : 'badge-offline')}">${k.status}</span></td>
@@ -863,7 +948,7 @@
 
         async function revokeKey(key) {
             if (!confirm(`Revoke key ${key}?`)) return;
-            await fetch('/api/admin/keys/revoke', {
+            await apiFetch('/api/admin/keys/revoke', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ key })
@@ -872,9 +957,10 @@
         }
 
         async function loadAlerts() {
-            const res = await fetch('/api/control/alerts');
-            const alerts = await res.json();
+            const res = await apiFetch('/api/control/alerts');
+            const data = await res.json();
             const tbody = document.getElementById('alerts-tbody');
+            const alerts = Array.isArray(data) ? data : [];
             tbody.innerHTML = alerts.map(a => `
                 <tr>
                     <td><span class="badge badge-${a.severity}">${a.severity.toUpperCase()}</span></td>
@@ -891,15 +977,16 @@
         }
 
         async function resolveAlert(id) {
-            await fetch(`/api/control/alerts/${id}/resolve`, { method: 'POST' });
+            await apiFetch(`/api/control/alerts/${id}/resolve`, { method: 'POST' });
             loadAlerts();
             fetchHealth();
         }
 
         async function loadErrors() {
-            const res = await fetch('/api/control/errors');
-            const errors = await res.json();
+            const res = await apiFetch('/api/control/errors');
+            const data = await res.json();
             const tbody = document.getElementById('errors-tbody');
+            const errors = Array.isArray(data) ? data : [];
             tbody.innerHTML = errors.map(e => `
                 <tr>
                     <td><strong>${e.shopId}</strong></td>
@@ -911,9 +998,10 @@
         }
 
         async function loadAudit() {
-            const res = await fetch('/api/control/audit');
-            const logs = await res.json();
+            const res = await apiFetch('/api/control/audit');
+            const data = await res.json();
             const tbody = document.getElementById('audit-tbody');
+            const logs = Array.isArray(data) ? data : [];
             tbody.innerHTML = logs.map(l => `
                 <tr>
                     <td>${new Date(l.timestamp).toLocaleTimeString()}</td>
@@ -923,6 +1011,39 @@
                     <td><small>${l.details}</small></td>
                 </tr>
             `).join('') || '<tr><td colspan="5">No audit entries.</td></tr>';
+        }
+
+        async function loadBackups() {
+            try {
+                const res = await apiFetch('/api/admin/backups');
+                const data = await res.json();
+                const tbody = document.getElementById('backups-tbody');
+                const backups = Array.isArray(data.backups) ? data.backups : [];
+                tbody.innerHTML = backups.map(b => `
+                    <tr>
+                        <td><strong style="font-family: monospace; color: #38bdf8;">${b.name}</strong></td>
+                        <td>${(b.sizeBytes / 1024).toFixed(1)} KB</td>
+                        <td>${new Date(b.createdAt).toLocaleString()}</td>
+                    </tr>
+                `).join('') || '<tr><td colspan="3" style="text-align:center; color: var(--text-muted);">No backups taken yet. Click "+ Create Live Backup" above.</td></tr>';
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function triggerBackup() {
+            try {
+                const res = await apiFetch('/api/admin/backup', { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    alert(`Live backup created successfully!\nFile: ${data.backupFile}\nSize: ${(data.sizeBytes / 1024).toFixed(1)} KB`);
+                    loadBackups();
+                } else {
+                    alert(`Backup failed: ${data.error}`);
+                }
+            } catch (e) {
+                alert(`Error: ${e.message}`);
+            }
         }
 
         async function askCopilot(query) {
@@ -941,7 +1062,7 @@
             msgs.scrollTop = msgs.scrollHeight;
 
             try {
-                const res = await fetch('/api/copilot/query', {
+                const res = await apiFetch('/api/copilot/query', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ query: q })

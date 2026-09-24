@@ -1,0 +1,35 @@
+# Dependency directories
+node_modules/
+cloud-server/node_modules/
+
+# Local databases and WAL logs
+*.db
+*.db-wal
+*.db-shm
+*.db-backup
+cloud_control.db*
+cloud-server/*.db*
+src/main/database/*.db*
+
+# Dynamic persistent uploads and backup artifacts
+uploads/
+backups/
+cloud-server/uploads/
+cloud-server/backups/
+
+# Local environment secrets and credentials
+.env
+.env.*
+!.env.example
+!cloud-server/.env.example
+
+# Runtime log outputs and builds
+*.log
+dist/
+dist-electron/
+
+# Git and OS metadata
+.git/
+.gitignore
+.DS_Store
+Thumbs.db

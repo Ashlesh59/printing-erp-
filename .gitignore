@@ -17,3 +17,8 @@ cloud-server/*.db-shm
 *.db
 *.db-wal
 *.db-shm
+cloud-server/backups/
+.env
+.env.*
+!.env.example
+!cloud-server/.env.example

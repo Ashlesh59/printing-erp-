@@ -212,7 +212,7 @@ async function runSuite() {
             if (data.type === 'remote_command') {
                 receivedCommand = data;
                 // Verify HMAC-SHA256 signature
-                const payload = `${data.command}:${data.id}:${data.timestamp}`;
+                const payload = data.nonce ? `${data.command}:${data.id}:${data.timestamp}:${data.nonce}` : `${data.command}:${data.id}:${data.timestamp}`;
                 const expectedSignature = crypto.createHmac('sha256', shop1Token)
                                                 .update(payload)
                                                 .digest('hex');

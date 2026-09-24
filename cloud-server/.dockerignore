@@ -1,0 +1,28 @@
+# Dependency directories (compiled inside container)
+node_modules/
+
+# Local databases and WAL logs (must not be baked into image)
+*.db
+*.db-wal
+*.db-shm
+*.db-backup
+cloud_control.db*
+
+# Dynamic persistent uploads and backup artifacts
+uploads/
+backups/
+
+# Local environment secrets and credentials
+.env
+.env.*
+!.env.example
+
+# Runtime log outputs
+*.log
+npm-debug.log*
+
+# Git and OS metadata
+.git/
+.gitignore
+.DS_Store
+Thumbs.db
