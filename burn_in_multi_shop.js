@@ -259,18 +259,23 @@ async function runBurnInSuite() {
                           .digest('hex')
     };
     // First time
+    CloudClient.authToken = shopA.data.token;
+    const testNow = Date.now();
+    const validSig = crypto.createHmac('sha256', shopA.data.token).update(`lock:NONCE_123:${testNow}`).digest('hex');
     const firstCheck = CloudClient.verifyCommandSignature({
         command: 'lock',
         id: 'NONCE_123',
-        timestamp: Date.now(),
-        signature: crypto.createHmac('sha256', shopA.data.token).update(`lock:NONCE_123:${Date.now()}`).digest('hex')
+        timestamp: testNow,
+        signature: validSig
     });
+    assert(firstCheck, 'Initial command with valid signature accepted');
+
     // Replay same ID
     const secondCheck = CloudClient.verifyCommandSignature({
         command: 'lock',
         id: 'NONCE_123',
-        timestamp: Date.now(),
-        signature: crypto.createHmac('sha256', shopA.data.token).update(`lock:NONCE_123:${Date.now()}`).digest('hex')
+        timestamp: testNow,
+        signature: validSig
     });
     assert(!secondCheck, 'Anti-Replay defense strictly blocked duplicate command ID execution');
 

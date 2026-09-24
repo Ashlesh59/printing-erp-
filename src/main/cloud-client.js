@@ -27,7 +27,7 @@ class CloudClient {
         this.loadConfig();
         
         this.ws = null;
-        this.cloudUrl = process.env.CLOUD_MASTER_URL || 'wss://api.printshopmanager.com/v1/telemetry';
+        this.cloudUrl = process.env.CLOUD_MASTER_URL || 'wss://control.desksolutions.in/v1/telemetry';
         this.version = electronApp && typeof electronApp.getVersion === 'function' ? electronApp.getVersion() : '1.0.0';
         this.sentryDsn = process.env.SENTRY_DSN || null;
         this.reconnectAttempts = 0;
@@ -89,7 +89,7 @@ class CloudClient {
 
     async enroll(key, shopName, serverUrl) {
         try {
-            const baseUrl = (serverUrl || 'http://127.0.0.1:5005').replace(/\/$/, '');
+            const baseUrl = (serverUrl || process.env.CLOUD_SERVER_URL || 'https://control.desksolutions.in').replace(/\/$/, '');
             const url = `${baseUrl}/api/enroll`;
             
             const response = await globalThis.fetch(url, {
