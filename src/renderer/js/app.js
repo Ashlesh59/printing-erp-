@@ -320,6 +320,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Admin Dashboard Logic
     async function loadAdminDashboard() {
+        loadControlCenterStatus(); // from admin
         if (!window.api) return;
         
         try {
@@ -2853,7 +2854,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             });
             
-            if (targetTab === 'settings-backup') {
+            if (targetTab === 'settings-cloud') {
+                loadControlCenterStatus();
+            } else if (targetTab === 'settings-backup') {
                 loadDatabaseBackupDashboard();
             } else if (targetTab === 'settings-profiles') {
                 loadProductsAndProfilesDashboard();
@@ -5816,3 +5819,169 @@ function recoverUIStuckState() {
         console.error("UI recovery error:", e);
     }
 }
+
+
+    // ==========================================
+    // FOUNDER CONTROL CENTER FLEET ENROLLMENT
+    // ==========================================
+    async function loadControlCenterStatus() {
+        if (!window.api || !window.api.cloudStatus) return;
+        try {
+            const status = await window.api.cloudStatus();
+            const badges = [
+                document.getElementById('admin-cc-status-badge'),
+                document.getElementById('settings-cc-status-badge')
+            ];
+            const detailBoxes = [
+                document.getElementById('admin-cc-detail'),
+                document.getElementById('settings-cc-detail-box')
+            ];
+            const shopIdEls = [
+                document.getElementById('admin-cc-shop-id'),
+                document.getElementById('settings-cc-shop-id')
+            ];
+            const connEls = [
+                document.getElementById('admin-cc-conn-state'),
+                document.getElementById('settings-cc-conn-state')
+            ];
+            const targetEls = [
+                document.getElementById('admin-cc-target'),
+                document.getElementById('settings-cc-target')
+            ];
+            const reconnectBtns = [
+                document.getElementById('admin-cc-reconnect-btn'),
+                document.getElementById('btn-settings-reconnect-cc')
+            ];
+
+            if (status && status.enrolled) {
+                badges.forEach(b => {
+                    if (b) {
+                        b.textContent = status.connected ? '🟢 Enrolled & Connected' : '🟡 Enrolled (Connecting)';
+                        b.style.background = status.connected ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)';
+                        b.style.color = status.connected ? 'var(--success-color)' : '#f59e0b';
+                    }
+                });
+                detailBoxes.forEach(d => { if (d) d.style.display = 'block'; });
+                shopIdEls.forEach(el => { if (el) el.textContent = status.shopId || '-'; });
+                connEls.forEach(el => { 
+                    if (el) {
+                        el.textContent = status.connected ? 'Active WebSocket Telemetry' : 'Connecting / Retrying';
+                        el.style.color = status.connected ? 'var(--success-color)' : '#f59e0b';
+                    }
+                });
+                targetEls.forEach(el => { if (el) el.textContent = status.server || '-'; });
+                reconnectBtns.forEach(btn => { if (btn) btn.style.display = 'inline-flex'; });
+
+                // If enrolled, populate server field if empty
+                const serverInputs = [
+                    document.getElementById('admin-setting-cc-server'),
+                    document.getElementById('settings-cc-server')
+                ];
+                serverInputs.forEach(inp => {
+                    if (inp && !inp.value && status.server) {
+                        inp.value = status.server.replace('wss://', 'https://').replace('ws://', 'http://').replace('/v1/telemetry', '');
+                    }
+                });
+            } else {
+                badges.forEach(b => {
+                    if (b) {
+                        b.textContent = '⚪ Not Enrolled';
+                        b.style.background = 'rgba(100, 116, 139, 0.15)';
+                        b.style.color = 'var(--text-secondary)';
+                    }
+                });
+                detailBoxes.forEach(d => { if (d) d.style.display = 'none'; });
+                reconnectBtns.forEach(btn => { if (btn) btn.style.display = 'none'; });
+            }
+        } catch (e) {
+            console.error('[ControlCenter] Failed to get status:', e);
+        }
+    }
+
+    async function handleControlCenterEnroll(serverInputId, keyInputId, nameInputId, btnId) {
+        if (!window.api || !window.api.cloudEnroll) {
+            window.showToast && window.showToast('Cloud enrollment API not available', 'error');
+            return;
+        }
+        const serverUrl = (document.getElementById(serverInputId)?.value || '').trim();
+        const key = (document.getElementById(keyInputId)?.value || '').trim();
+        const shopName = (document.getElementById(nameInputId)?.value || '').trim();
+
+        if (!serverUrl) {
+            window.showToast && window.showToast('Please enter Control Center Server URL (e.g. http://192.168.1.3:8080)', 'warning');
+            return;
+        }
+        if (!key) {
+            window.showToast && window.showToast('Please enter the enrollment key generated from Control Center.', 'warning');
+            return;
+        }
+        if (!shopName) {
+            window.showToast && window.showToast('Please enter a shop display name.', 'warning');
+            return;
+        }
+
+        const btn = document.getElementById(btnId);
+        const originalText = btn ? btn.innerHTML : '';
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span>⏳</span> Enrolling Shop...';
+        }
+
+        try {
+            const result = await window.api.cloudEnroll(key, shopName, serverUrl);
+            if (result && result.success) {
+                window.showToast && window.showToast(`🎉 Enrolled successfully! Shop ID: ${result.shopId}`, 'success');
+                const keyInp = document.getElementById(keyInputId);
+                if (keyInp) keyInp.value = '';
+                await loadControlCenterStatus();
+            } else {
+                const errMsg = result?.error || 'Enrollment request rejected or timed out.';
+                window.showToast && window.showToast(`Enrollment failed: ${errMsg}`, 'error');
+            }
+        } catch (err) {
+            console.error('[ControlCenter] Enrollment invocation failed:', err);
+            window.showToast && window.showToast(`Enrollment error: ${err.message}`, 'error');
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }
+        }
+    }
+
+    async function handleControlCenterReconnect() {
+        if (!window.api || !window.api.cloudReconnect) return;
+        try {
+            const res = await window.api.cloudReconnect();
+            if (res && res.success) {
+                window.showToast && window.showToast('Reconnecting telemetry socket...', 'info');
+                setTimeout(loadControlCenterStatus, 2000);
+            }
+        } catch (err) {
+            console.error('[ControlCenter] Reconnect error:', err);
+        }
+    }
+
+    // Attach listeners for Admin Panel Control Center inputs
+    const adminEnrollCcBtn = document.getElementById('admin-enroll-control-center-btn');
+    if (adminEnrollCcBtn) {
+        adminEnrollCcBtn.addEventListener('click', () => {
+            handleControlCenterEnroll('admin-setting-cc-server', 'admin-setting-cc-key', 'admin-setting-cc-name', 'admin-enroll-control-center-btn');
+        });
+    }
+    const adminReconnectCcBtn = document.getElementById('admin-cc-reconnect-btn');
+    if (adminReconnectCcBtn) {
+        adminReconnectCcBtn.addEventListener('click', handleControlCenterReconnect);
+    }
+
+    // Attach listeners for Settings Control Center inputs
+    const settingsEnrollCcBtn = document.getElementById('btn-settings-enroll-cc');
+    if (settingsEnrollCcBtn) {
+        settingsEnrollCcBtn.addEventListener('click', () => {
+            handleControlCenterEnroll('settings-cc-server', 'settings-cc-key', 'settings-cc-name', 'btn-settings-enroll-cc');
+        });
+    }
+    const settingsReconnectCcBtn = document.getElementById('btn-settings-reconnect-cc');
+    if (settingsReconnectCcBtn) {
+        settingsReconnectCcBtn.addEventListener('click', handleControlCenterReconnect);
+    }

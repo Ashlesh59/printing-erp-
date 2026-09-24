@@ -526,6 +526,49 @@
                                 <p id="admin-backup-msg" style="margin-top: 12px; font-size: 0.85rem; text-align: center;"></p>
                             </div>
                             
+                                                        <!-- Founder Control Center Fleet Enrollment Panel -->
+                            <div class="panel" style="border: 1px solid rgba(99, 102, 241, 0.3); background: rgba(99, 102, 241, 0.03);">
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                                    <h2 style="margin: 0; font-size: 1.1rem; display: flex; align-items: center; gap: 8px;">
+                                        <span>🛡️</span> Founder Control Center
+                                    </h2>
+                                    <span id="admin-cc-status-badge" style="font-size: 0.75rem; padding: 2px 8px; border-radius: 99px; font-weight: 600; background: rgba(100, 116, 139, 0.15); color: var(--text-secondary);">
+                                        Checking...
+                                    </span>
+                                </div>
+                                <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 16px;">
+                                    Enroll this shop in your central fleet management dashboard for real-time telemetry, remote commands, and license oversight.
+                                </p>
+                                <div class="form-group" style="margin-bottom: 12px;">
+                                    <label>Control Center Server URL</label>
+                                    <input type="text" id="admin-setting-cc-server" placeholder="http://192.168.1.3:8080" value="http://192.168.1.3:8080">
+                                </div>
+                                <div class="form-group" style="margin-bottom: 12px;">
+                                    <label>Enrollment Key</label>
+                                    <input type="text" id="admin-setting-cc-key" placeholder="DK-XXXXXXXX" style="font-family: monospace; font-size: 0.95rem;">
+                                    <small style="color: var(--text-secondary); font-size: 0.78rem; margin-top: 4px; display: block;">
+                                        Enter the one-time enrollment key generated in Founder Control Center.
+                                    </small>
+                                </div>
+                                <div class="form-group" style="margin-bottom: 16px;">
+                                    <label>Shop Display Name</label>
+                                    <input type="text" id="admin-setting-cc-name" placeholder="DeskSolutions Test Shop - PC" value="DeskSolutions Test Shop - PC">
+                                </div>
+                                <div style="display: flex; gap: 8px;">
+                                    <button class="action-btn" id="admin-enroll-control-center-btn" style="background: linear-gradient(135deg, #4f46e5, #7c3aed); color: white; width: 100%; border: none; font-weight: 600; justify-content: center; padding: 10px;">
+                                        <span>🚀</span> Enroll in Control Center
+                                    </button>
+                                    <button class="action-btn" id="admin-cc-reconnect-btn" style="background: var(--bg-color); color: var(--text-primary); border: 1px solid var(--border-color); font-weight: 600; justify-content: center; padding: 10px 14px; display: none;" title="Reconnect Telemetry WebSocket">
+                                        <span>🔄</span>
+                                    </button>
+                                </div>
+                                <div id="admin-cc-detail" style="margin-top: 12px; font-size: 0.8rem; color: var(--text-secondary); display: none; padding: 10px; background: rgba(0,0,0,0.12); border-radius: 6px; line-height: 1.5;">
+                                    <div><strong>Shop ID:</strong> <span id="admin-cc-shop-id" style="font-family: monospace; color: var(--accent-color);">-</span></div>
+                                    <div><strong>Status:</strong> <span id="admin-cc-conn-state">-</span></div>
+                                    <div style="word-break: break-all;"><strong>Telemetry:</strong> <span id="admin-cc-target">-</span></div>
+                                </div>
+                            </div>
+
                             <!-- Cloud Sync Panel -->
                             <div class="panel">
                                 <h2 style="margin-top: 0; font-size: 1.1rem;">☁️ Cloud Portal Configuration</h2>
@@ -1489,6 +1532,7 @@
                         <button class="settings-tab-btn" data-tab="settings-pricing">Pricing & Access</button>
                         <button class="settings-tab-btn" data-tab="settings-profiles">Products & Print Profiles</button>
                         <button class="settings-tab-btn" data-tab="settings-backup">Backup & Recovery</button>
+                        <button class="settings-tab-btn" data-tab="settings-cloud">Control Center & Cloud</button>
                     </div>
 
                     <!-- General Settings Sub-View -->
@@ -1930,6 +1974,68 @@
                                         <!-- Dynamically populated -->
                                     </tbody>
                                 </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    
+                    <!-- Control Center & Cloud Sub-View -->
+                    <div id="settings-cloud" class="settings-sub-view" style="display: none;">
+                        <div class="panel" style="max-width: 900px; margin-top: 0; border: 1px solid rgba(99, 102, 241, 0.3); background: rgba(99, 102, 241, 0.02);">
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                                <div>
+                                    <h2 style="margin: 0; font-size: 1.2rem; display: flex; align-items: center; gap: 8px;">
+                                        <span>🛡️</span> Founder Control Center (Fleet Enrollment)
+                                    </h2>
+                                    <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 4px 0 0 0;">
+                                        Connect this PC installation to the Founder Control Center server for telemetry, remote command dispatch, and license oversight.
+                                    </p>
+                                </div>
+                                <span id="settings-cc-status-badge" style="font-size: 0.8rem; padding: 4px 10px; border-radius: 99px; font-weight: 600; background: rgba(100, 116, 139, 0.15); color: var(--text-secondary); white-space: nowrap;">
+                                    Checking...
+                                </span>
+                            </div>
+
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
+                                <div class="form-group">
+                                    <label style="font-weight: 600;">Control Center Server URL</label>
+                                    <input type="text" id="settings-cc-server" placeholder="http://192.168.1.3:8080" value="http://192.168.1.3:8080">
+                                    <small style="color: var(--text-secondary); font-size: 0.78rem; margin-top: 4px; display: block;">
+                                        IP address or domain of the Control Center server.
+                                    </small>
+                                </div>
+                                <div class="form-group">
+                                    <label style="font-weight: 600;">Shop Display Name</label>
+                                    <input type="text" id="settings-cc-name" placeholder="DeskSolutions Test Shop - PC" value="DeskSolutions Test Shop - PC">
+                                    <small style="color: var(--text-secondary); font-size: 0.78rem; margin-top: 4px; display: block;">
+                                        Name displayed in Founder Control Center fleet list.
+                                    </small>
+                                </div>
+                            </div>
+
+                            <div class="form-group" style="margin-top: 12px; margin-bottom: 16px;">
+                                <label style="font-weight: 600;">One-Time Enrollment Key</label>
+                                <input type="text" id="settings-cc-key" placeholder="DK-XXXXXXXX" style="font-family: monospace; font-size: 1rem; letter-spacing: 0.05em;">
+                                <small style="color: var(--text-secondary); font-size: 0.78rem; margin-top: 4px; display: block;">
+                                    Generated from Founder Control Center dashboard.
+                                </small>
+                            </div>
+
+                            <div style="display: flex; gap: 12px; align-items: center; margin-top: 16px;">
+                                <button class="action-btn" id="btn-settings-enroll-cc" style="background: linear-gradient(135deg, #4f46e5, #7c3aed); color: white; border: none; font-weight: 600; padding: 10px 20px; border-radius: 8px;">
+                                    <span>🚀</span> Enroll in Control Center
+                                </button>
+                                <button class="action-btn" id="btn-settings-reconnect-cc" style="background: var(--bg-color); color: var(--text-primary); border: 1px solid var(--border-color); font-weight: 600; padding: 10px 16px; border-radius: 8px; display: none;">
+                                    <span>🔄</span> Reconnect Telemetry
+                                </button>
+                            </div>
+
+                            <div id="settings-cc-detail-box" style="margin-top: 16px; padding: 12px 16px; background: rgba(0,0,0,0.1); border-radius: 8px; font-size: 0.85rem; display: none;">
+                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
+                                    <div><strong>Permanent Shop ID:</strong> <span id="settings-cc-shop-id" style="font-family: monospace; color: var(--accent-color);">-</span></div>
+                                    <div><strong>Connection:</strong> <span id="settings-cc-conn-state">-</span></div>
+                                    <div><strong>Telemetry Target:</strong> <span id="settings-cc-target" style="font-size: 0.8rem; word-break: break-all;">-</span></div>
+                                </div>
                             </div>
                         </div>
                     </div>
